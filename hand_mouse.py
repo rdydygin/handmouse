@@ -459,7 +459,9 @@ class GestureEngine:
         h = self.swipe_hist
         _, x0, y0, r0, p0 = h[0]
         _, x1, y1, r1, p1 = h[-1]
-        sx, sy, swing = (x1 - x0) / SWIPE_DIST, (y1 - y0) / SWIPE_DIST, 0.0
+        # sx is signed (direction of the swipe); sy only needs a size, and both of
+        # its parts count as vertical, so add magnitudes: they must not cancel.
+        sx, sy, swing = (x1 - x0) / SWIPE_DIST, abs(y1 - y0) / SWIPE_DIST, 0.0
         if r0 is not None and r1 is not None:
             swing = _angle_diff(r1, r0)
             sx += swing / SWIPE_ANGLE
