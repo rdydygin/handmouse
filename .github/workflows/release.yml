@@ -1,0 +1,37 @@
+# Publishes a release when a version tag is pushed, e.g.:
+#   git tag v1.4 && git push origin v1.4
+# The tag must match VERSION in build_app.sh. Installed copies of Hand Mouse
+# check the latest release about once a day and update themselves from it.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag matches build_app.sh
+        run: |
+          version=$(sed -n 's/^VERSION=\([0-9.]*\).*/\1/p' build_app.sh)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match VERSION=$version in build_app.sh"
+            exit 1
+          fi
+
+      - name: Build Hand Mouse.app
+        run: ./build_app.sh
+
+      - name: Zip
+        run: cd dist && zip -qry ../Hand-Mouse-app.zip "Hand Mouse.app"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" Hand-Mouse-app.zip --title "Hand Mouse ${GITHUB_REF_NAME#v}" --generate-notes
