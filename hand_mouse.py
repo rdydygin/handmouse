@@ -342,7 +342,6 @@ class GestureEngine:
         self.scroll_v = 0.0                    # recent scroll speed, px/s
         self.sf = OneEuro(1.5, 0.8)            # scroll-position filter (frame units)
         self.swipe_hist = collections.deque()  # (t, x, y) palm positions in scroll / swipe pose
-        self.in_swipe = False                  # holding the three-finger swipe pose
         self.swipe_ready_at = 0.0
         self.flash, self.flash_until = "", 0.0 # short on-screen message (e.g. swipe)
         self.last_seen = 0.0
@@ -442,7 +441,6 @@ class GestureEngine:
                 self.prev = None
                 self.fx.reset(); self.fy.reset()
             self.scroll_prev, self.scroll_v = None, 0.0
-            self.in_swipe = False
             self.mode = "paused" if self.paused else "no hand"
             return
         self.last_seen = t
@@ -559,8 +557,9 @@ class GestureEngine:
 
         # --- Three-finger swipe: flick left/right to switch desktops ---
         if self.pose == "swipe" and not cfg.no_three_finger_swipe:
-            if not self.in_swipe:   # entering the pose: stop any coasting
-                self.in_swipe = True
+            # self.mode still holds the last frame's mode, so this catches every way
+            # into the pose (from scrolling, a click, a lost hand...).
+            if self.mode != "swipe":   # entering the pose: stop any coasting
                 m.scroll_momentum(0)
                 self.swipe_hist.clear()
             self.mode = "swipe"     # cursor holds still, like a trackpad swipe
@@ -568,7 +567,6 @@ class GestureEngine:
             if nxt is not None:
                 self._switch_desktop(nxt, t)
             return
-        self.in_swipe = False
 
         # --- Fist: clutch (cursor holds still) ---
         if self.pose == "fist":
