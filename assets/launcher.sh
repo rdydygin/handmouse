@@ -167,7 +167,9 @@ if [ ! -f "$SETTINGS" ]; then
 # --absolute           point at the screen directly instead of trackpad-style movement
 # --pinch-on 0.33      clicks trigger more easily (default 0.28; lower = fewer accidental clicks)
 # --invert-scroll      reverse scroll direction
-# --scroll-speed 5000  faster scrolling (default 3500)
+# --scroll-speed 5000  faster scrolling when moving the hand (default 3500)
+# --tilt-scroll-speed 2000  faster scrolling when tilting the hand (default 1200)
+# --no-tilt            tilting the hand doesn't scroll or swipe, only moving it does
 # --swipe-action browser   peace-sign flick = browser back/forward instead of switching desktops
 # --swipe-action off       turn peace-sign swipes off
 # --no-three-finger-swipe  turn off the three-finger flick that switches desktops

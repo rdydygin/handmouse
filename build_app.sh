@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 
 APP="dist/Hand Mouse.app"
 MODEL=models/hand_landmarker.task
-VERSION=1.5.1   # bump this, then push a tag "v<VERSION>" to publish a release
+VERSION=1.6   # bump this, then push a tag "v<VERSION>" to publish a release
 
 if [ ! -f "$MODEL" ]; then
   mkdir -p models
