@@ -169,7 +169,8 @@ if [ ! -f "$SETTINGS" ]; then
 # --invert-scroll      reverse scroll direction
 # --scroll-speed 5000  faster scrolling (default 3500)
 # --swipe-action browser   peace-sign flick = browser back/forward instead of switching desktops
-# --swipe-action off       turn swipes off
+# --swipe-action off       turn peace-sign swipes off
+# --no-three-finger-swipe  turn off the three-finger flick that switches desktops
 # --allow-back-of-hand    keep tracking the hand when its back faces the camera
 # --camera 1           use another camera (e.g. if an iPhone took over as camera 0)
 # --no-auto-update     don't download new versions of Hand Mouse automatically
