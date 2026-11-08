@@ -182,6 +182,7 @@ ARGS=$(sed -e 's/#.*//' -e 's/--no-auto-update//g' "$SETTINGS" | tr '\n' ' ')
 # ---- run ------------------------------------------------------------------
 export HANDMOUSE_ICON="$RES/HandMouse.icns"
 export HANDMOUSE_SETTINGS="$SETTINGS"
+export HANDMOUSE_VERSION="${CURRENT_VERSION:-unknown}"
 # shellcheck disable=SC2086  # ARGS is intentionally split into words
 "$VENV/bin/python" "$RES/hand_mouse.py" --app --model "$RES/hand_landmarker.task" $ARGS &
 CHILD=$!
