@@ -80,6 +80,7 @@ Hold one hand up, palm toward the camera, about 40–70 cm from the screen. Eith
 
 The preview window shows your tracked hand, the current mode, and live pinch values
 (`pinch L` / `R`): a click fires when the value drops below 0.28.
+The version number is in the top bar, next to the frame rate (`./run.sh --version` from Terminal).
 
 ## Tuning
 

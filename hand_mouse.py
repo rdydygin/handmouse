@@ -43,6 +43,25 @@ import mediapipe as mp
 from mediapipe.tasks.python import BaseOptions, vision
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def app_version():
+    """The app passes its version in HANDMOUSE_VERSION (from Info.plist). Run
+    from the repository, read it from build_app.sh, the one place it's set."""
+    v = os.environ.get("HANDMOUSE_VERSION")
+    if v:
+        return v
+    try:
+        with open(os.path.join(HERE, "build_app.sh")) as f:
+            for line in f:
+                if line.startswith("VERSION="):
+                    return line[len("VERSION="):].split()[0] + "-dev"
+    except OSError:
+        pass
+    return "dev"
+
+
+VERSION = app_version()
 MODEL_PATH = os.path.join(HERE, "models", "hand_landmarker.task")
 MODEL_URL = ("https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
              "hand_landmarker/float16/1/hand_landmarker.task")
@@ -774,6 +793,9 @@ def draw_hud(frame, engine, lms, fps, trusted=True):
         txt = f"pinch L {engine.metrics['left']:.2f}  R {engine.metrics['right']:.2f}"
         cv2.putText(frame, txt, (w // 2 - 90, 23), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
     cv2.putText(frame, f"{fps:4.0f} fps", (w - 85, 23), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+    ver = f"v{VERSION}"
+    (tw, _), _ = cv2.getTextSize(ver, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
+    cv2.putText(frame, ver, (w - 100 - tw, 23), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (140, 140, 140), 1)
     if not trusted:
         cv2.rectangle(frame, (0, 34), (w, 84), (0, 0, 170), -1)
         cv2.putText(frame, "Cursor control is OFF: allow Hand Mouse in", (10, 54),
@@ -786,6 +808,7 @@ def draw_hud(frame, engine, lms, fps, trusted=True):
 
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description="Control the mouse with hand gestures via the webcam.")
+    p.add_argument("--version", action="version", version=f"Hand Mouse {VERSION}")
     p.add_argument("--camera", default="0", help="camera index (or video file path); default 0")
     p.add_argument("--absolute", action="store_true",
                    help="hand position maps directly to screen position (default: relative, "
@@ -847,6 +870,7 @@ def main(argv=None):
     win = "Hand Mouse"
     t0, last_ts, fps, prev_t, fails = time.monotonic(), -1, 0.0, time.monotonic(), 0
     last_trust_check, window_seen = time.monotonic(), False
+    print(f"Hand Mouse {VERSION}")
     print(__doc__)
 
     try:
