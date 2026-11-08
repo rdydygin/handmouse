@@ -74,6 +74,7 @@ Hold one hand up, palm toward the camera, about 40–70 cm from the screen. Eith
 | Switch desktop | 🤟 **Three fingers** up (index + middle + ring, pinky folded or bent) + a quick flick **left or right**: switches desktops / full-screen apps, like a 3-finger trackpad swipe. Flick left = next desktop, right = previous. The cursor holds still while you hold three fingers up. |
 | Swipe         | ✌️ Peace sign + a quick flick **left or right** also switches desktops. Can be set to browser back/forward instead, so the two swipes do different things. |
 | Re-center     | ✊ Make a fist: the cursor stays put while you move your hand back to a comfortable spot. Open your hand to continue. Like lifting a mouse off the desk. |
+| Ignore hand   | Turn the **back** of your hand to the camera: it isn't tracked (the window shows `BACK OF HAND`), so you can rest it or type without moving the cursor. Show your palm again to continue. |
 | Pause/resume  | Press `p` or space in the Hand Mouse window. |
 | Quit          | Press `q` or Esc in the Hand Mouse window (or ⌘Q, or close the window). |
 
@@ -97,6 +98,7 @@ In the app, put these in the settings file (press `s`). From Terminal, pass them
 | `--no-three-finger-swipe` | off | Turn off the three-finger flick that switches desktops. |
 | `--scroll-speed 5000` | 3500 | Faster scrolling. |
 | `--camera 1` | 0 | Use a different camera, e.g. if an iPhone Continuity Camera took index 0. |
+| `--allow-back-of-hand` | off | Keep tracking the hand when its back faces the camera. |
 | `--dry-run` | off | Track and print actions without touching the mouse. |
 | `--no-preview` | off | Run without the camera window. |
 
