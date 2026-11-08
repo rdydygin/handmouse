@@ -14,6 +14,8 @@ Gestures (palm toward the camera, either hand):
                 (or browser back/forward with --swipe-action browser)
   Clutch        make a fist: the cursor stops so you can re-center your hand,
                 like lifting a mouse off the desk
+  Ignore        turn the back of your hand to the camera: it's not tracked, so you
+                can rest it or use the keyboard without moving the cursor
 
 Keys (preview window focused):  q / Esc = quit,  p / space = pause / resume,
                                 s = settings (app only)
@@ -51,7 +53,8 @@ RING_PIP, RING_TIP = 14, 16
 PINKY_PIP, PINKY_TIP = 18, 20
 FINGERS = {"index": (INDEX_PIP, INDEX_TIP), "middle": (MIDDLE_PIP, MIDDLE_TIP),
            "ring": (RING_PIP, RING_TIP), "pinky": (PINKY_PIP, PINKY_TIP)}
-PALM = (WRIST, INDEX_MCP, MIDDLE_MCP, 13, 17)
+PINKY_MCP = 17
+PALM = (WRIST, INDEX_MCP, MIDDLE_MCP, 13, PINKY_MCP)
 
 # Cursor feel. Filter: lower MIN_CUTOFF = steadier when still; higher BETA =
 # less lag when moving fast. Acceleration: GAIN_MIN applies to slow movements
@@ -67,6 +70,10 @@ MOMENTUM_MIN, MOMENTUM_DECAY = 700, 0.35
 # Swipes: peace sign moved sideways by SWIPE_DIST of the frame width within
 # SWIPE_WINDOW seconds, mostly horizontally. One swipe per SWIPE_COOLDOWN seconds.
 SWIPE_DIST, SWIPE_WINDOW, SWIPE_COOLDOWN = 0.13, 0.3, 0.8
+# Back of the hand toward the camera: palm_side() below this (and above minus
+# this for palm) counts; in between (hand edge-on) is ambiguous. Frames in a row
+# needed to stop tracking / resume it: quick to let go, slower to pick back up.
+PALM_SIDE_MIN, BACK_FRAMES, PALM_FRAMES = 0.2, 2, 3
 KEY_LEFT, KEY_RIGHT, KEY_LBRACKET, KEY_RBRACKET = 123, 124, 33, 30
 HAND_CONNECTIONS = [(0, 1), (1, 2), (2, 3), (3, 4), (0, 5), (5, 6), (6, 7), (7, 8),
                     (5, 9), (9, 10), (10, 11), (11, 12), (9, 13), (13, 14), (14, 15),
@@ -321,6 +328,23 @@ def _dist(a, b):
     return math.hypot(a[0] - b[0], a[1] - b[1])
 
 
+def palm_side(lms, handedness, frame_aspect):
+    """How squarely the palm faces the camera: about +0.7 for a flat palm, -0.7
+    for the back of the hand, near 0 edge-on. `lms` are landmarks of the mirrored
+    frame and `handedness` is MediaPipe's "Left"/"Right" label for that frame.
+    The wrist -> index knuckle -> pinky knuckle triangle winds one way when the
+    palm faces the camera and the other way when the back does, and the way it
+    winds depends on which hand it is. (Checked against MediaPipe's own palm and
+    back-of-hand test photos.)"""
+    P = [(x * frame_aspect, y) for x, y in lms]
+    wx, wy = P[WRIST]
+    ax, ay = P[INDEX_MCP][0] - wx, P[INDEX_MCP][1] - wy
+    bx, by = P[PINKY_MCP][0] - wx, P[PINKY_MCP][1] - wy
+    size2 = _dist(P[WRIST], P[MIDDLE_MCP]) ** 2 or 1e-6
+    cross = (ax * by - ay * bx) / size2
+    return cross if handedness == "Left" else -cross
+
+
 class GestureEngine:
     def __init__(self, mouse, cfg):
         self.mouse = mouse
@@ -343,6 +367,8 @@ class GestureEngine:
         self.swipe_ready_at = 0.0
         self.flash, self.flash_until = "", 0.0 # short on-screen message (e.g. swipe)
         self.last_seen = 0.0
+        self.facing_away = False               # back of the hand toward the camera
+        self.back_n = self.palm_n = 0
         self.metrics = {}
         self.cx, self.cy = mouse.x, mouse.y   # virtual cursor (relative mode)
 
@@ -416,17 +442,46 @@ class GestureEngine:
             self.scroll_v = 0.0
         self.scroll_prev = y
 
-    def update(self, lms, frame_aspect, t):
-        """lms: 21 (x, y) normalized landmarks of a mirrored frame, or None."""
+    def _hand_gone(self, t):
+        if self.left and t - self.last_seen > 0.3:   # lost hand mid-drag
+            self.release_all()
+        if t - self.last_seen > 0.3:
+            self.prev = None
+            self.fx.reset(); self.fy.reset()
+        self.scroll_prev, self.scroll_v = None, 0.0
+
+    def _check_facing(self, lms, handedness, frame_aspect):
+        """Track whether the back of the hand faces the camera (with debouncing)."""
+        side = palm_side(lms, handedness, frame_aspect)
+        if side < -PALM_SIDE_MIN:
+            self.back_n, self.palm_n = self.back_n + 1, 0
+        elif side > PALM_SIDE_MIN:
+            self.palm_n, self.back_n = self.palm_n + 1, 0
+        if self.back_n >= BACK_FRAMES:
+            self.facing_away = True
+        elif self.palm_n >= PALM_FRAMES:
+            self.facing_away = False
+
+    def update(self, lms, frame_aspect, t, handedness=None):
+        """lms: 21 (x, y) normalized landmarks of a mirrored frame, or None.
+        handedness: MediaPipe's "Left"/"Right" label for the hand; if given, a
+        hand showing its back to the camera is ignored."""
         cfg, m = self.cfg, self.mouse
 
-        if lms is None:
-            if self.left and t - self.last_seen > 0.3:   # lost hand mid-drag
-                self.release_all()
-            if t - self.last_seen > 0.3:
+        if lms is not None and handedness and not cfg.allow_back_of_hand:
+            self._check_facing(lms, handedness, frame_aspect)
+            if self.facing_away:
+                self._hand_gone(t)
+                # Turning the hand moves the palm centre, so don't let the cursor
+                # jump by that much when the palm comes back.
                 self.prev = None
                 self.fx.reset(); self.fy.reset()
-            self.scroll_prev, self.scroll_v = None, 0.0
+                self.pose_candidate, self.pose_count = "open", 0
+                self.mode = "paused" if self.paused else "back of hand"
+                return
+
+        if lms is None:
+            self._hand_gone(t)
             self.mode = "paused" if self.paused else "no hand"
             return
         self.last_seen = t
@@ -661,7 +716,8 @@ def draw_hud(frame, engine, lms, fps, trusted=True):
     h, w = frame.shape[:2]
     colors = {"move": (80, 220, 80), "click": (0, 200, 255), "drag": (0, 140, 255),
               "right click": (255, 120, 0), "scroll": (255, 0, 200),
-              "fist (hold)": (180, 180, 180), "paused": (0, 0, 255), "no hand": (120, 120, 120)}
+              "fist (hold)": (180, 180, 180), "paused": (0, 0, 255), "no hand": (120, 120, 120),
+              "back of hand": (120, 120, 120)}
     color = colors.get(engine.mode, (255, 255, 255))
     if engine.cfg.absolute:
         x0, y0, x1, y1 = engine.region(w / h)
@@ -713,6 +769,8 @@ def parse_args(argv=None):
     p.add_argument("--swipe-action", choices=("desktops", "browser", "off"), default="desktops",
                    help="what a sideways flick does: switch desktops (Ctrl+arrows, default), "
                         "browser back/forward (Cmd+[ / ]), or nothing")
+    p.add_argument("--allow-back-of-hand", action="store_true",
+                   help="track the hand even when its back faces the camera (default: only the palm side)")
     p.add_argument("--no-preview", action="store_true", help="don't show the camera window (Ctrl+C to quit)")
     p.add_argument("--dry-run", action="store_true", help="track and print actions, don't move the mouse")
     p.add_argument("--model", help=argparse.SUPPRESS)
@@ -775,7 +833,8 @@ def main(argv=None):
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 result = landmarker.detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb), ts)
                 lms = [(l.x, l.y) for l in result.hand_landmarks[0]] if result.hand_landmarks else None
-                engine.update(lms, frame.shape[1] / frame.shape[0], now)
+                handed = result.handedness[0][0].category_name if lms and result.handedness else None
+                engine.update(lms, frame.shape[1] / frame.shape[0], now, handed)
 
                 if not trusted and now - last_trust_check > 2:   # pick up a newly granted permission
                     trusted, last_trust_check = accessibility_trusted(), now

@@ -73,6 +73,7 @@ Hold one hand up, palm toward the camera, about 40–70 cm from the screen. Eith
 | Scroll        | ✌️ Peace sign (index + middle up, ring + pinky folded), then move your hand up/down. Faster hand = faster scroll. Flick and then drop the peace sign to let it coast, like a trackpad. Make the peace sign again (or click) to stop the coasting. |
 | Swipe         | ✌️ Peace sign + a quick flick **left or right**: switches desktops / full-screen apps (like a 3-finger trackpad swipe). Flick left = next desktop, right = previous. Can be set to browser back/forward instead. |
 | Re-center     | ✊ Make a fist: the cursor stays put while you move your hand back to a comfortable spot. Open your hand to continue. Like lifting a mouse off the desk. |
+| Ignore hand   | Turn the **back** of your hand to the camera: it isn't tracked (the window shows `BACK OF HAND`), so you can rest it or type without moving the cursor. Show your palm again to continue. |
 | Pause/resume  | Press `p` or space in the Hand Mouse window. |
 | Quit          | Press `q` or Esc in the Hand Mouse window (or ⌘Q, or close the window). |
 
@@ -95,6 +96,7 @@ In the app, put these in the settings file (press `s`). From Terminal, pass them
 | `--swipe-action browser` | desktops | Make swipes go back/forward in the browser and Finder (⌘[ / ⌘]) instead of switching desktops. `off` disables swipes. |
 | `--scroll-speed 5000` | 3500 | Faster scrolling. |
 | `--camera 1` | 0 | Use a different camera, e.g. if an iPhone Continuity Camera took index 0. |
+| `--allow-back-of-hand` | off | Keep tracking the hand when its back faces the camera. |
 | `--dry-run` | off | Track and print actions without touching the mouse. |
 | `--no-preview` | off | Run without the camera window. |
 
