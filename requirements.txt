@@ -1,0 +1,4 @@
+# mediapipe also pulls in opencv-contrib-python, numpy and certifi
+mediapipe>=0.10.14
+pyobjc-framework-Quartz; sys_platform == "darwin"
+pyobjc-framework-ApplicationServices; sys_platform == "darwin"
