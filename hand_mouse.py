@@ -8,10 +8,14 @@ Gestures (palm toward the camera, either hand):
   Double click  two quick taps
   Drag          pinch thumb + index, move, release
   Right click   tap thumb + middle fingertips
-  Scroll        "peace sign" (index + middle up, others folded), move hand up/down;
-                flick and change pose to let it coast, like a trackpad
+  Scroll        "peace sign" (index + middle up, others folded), then tilt your
+                fingers toward the camera (scroll down) or back (scroll up); the
+                further you tilt, the faster. Or move the hand up/down: flick and
+                change pose to let it coast, like a trackpad
   Swipe         three fingers up (index + middle + ring, pinky folded) + quick
-                flick left/right: switch desktops, like a 3-finger trackpad swipe
+                flick left/right: switch desktops, like a 3-finger trackpad swipe.
+                Swinging the fingers sideways from the wrist (like a windshield
+                wiper) is enough; the hand doesn't have to travel.
                 (the peace sign flicks too; --swipe-action browser makes the
                 peace-sign flick go back/forward in the browser instead)
   Clutch        make a fist: the cursor stops so you can re-center your hand,
@@ -91,6 +95,15 @@ MOMENTUM_MIN, MOMENTUM_DECAY = 700, 0.35
 # Swipes: peace sign or three fingers moved sideways by SWIPE_DIST of the frame width within
 # SWIPE_WINDOW seconds, mostly horizontally. One swipe per SWIPE_COOLDOWN seconds.
 SWIPE_DIST, SWIPE_WINDOW, SWIPE_COOLDOWN = 0.13, 0.3, 0.8
+# Tilting instead of moving the hand (the wrist stays put, so the hand stays in view).
+# Swipe: the fingers swing sideways by SWIPE_ANGLE degrees within SWIPE_WINDOW (this
+# adds up with sideways hand travel). Scroll: the fingers lean toward / away from the
+# camera more than TILT_DEADZONE degrees from where they were when the peace sign
+# began; TILT_FULL degrees past that scrolls at --tilt-scroll-speed, and further
+# tilts go faster, up to TILT_MAX times that. Within the dead zone the rest
+# position follows the hand over TILT_ADAPT seconds, so slow drift doesn't scroll.
+SWIPE_ANGLE = 22
+TILT_DEADZONE, TILT_FULL, TILT_MAX, TILT_ADAPT = 10, 20, 2.0, 2.0
 # Back of the hand toward the camera: palm_side() below this (and above minus
 # this for palm) counts; in between (hand edge-on) is ambiguous. Frames in a row
 # needed to stop tracking / resume it: quick to let go, slower to pick back up.
@@ -366,6 +379,23 @@ def palm_side(lms, handedness, frame_aspect):
     return cross if handedness == "Left" else -cross
 
 
+def hand_angles(world):
+    """(roll, pitch) of the palm in degrees, from MediaPipe's 3D world landmarks
+    of the mirrored frame (x right, y down, z away from the camera). Both are 0
+    for an upright hand. roll > 0: fingers lean right in the picture, < 0: left
+    (a windshield-wiper turn at the wrist). pitch > 0: fingers lean toward the
+    camera, < 0: away. Measured along the palm (wrist -> middle knuckle), so
+    bending the fingers doesn't change it."""
+    (wx, wy, wz), (mx, my, mz) = world[WRIST], world[MIDDLE_MCP]
+    dx, dy, dz = mx - wx, my - wy, mz - wz
+    return (math.degrees(math.atan2(dx, -dy)),
+            math.degrees(math.atan2(-dz, math.hypot(dx, dy))))
+
+
+def _angle_diff(a, b):
+    return (a - b + 180) % 360 - 180
+
+
 class GestureEngine:
     def __init__(self, mouse, cfg):
         self.mouse = mouse
@@ -384,7 +414,11 @@ class GestureEngine:
         self.scroll_prev = None
         self.scroll_v = 0.0                    # recent scroll speed, px/s
         self.sf = OneEuro(1.5, 0.8)            # scroll-position filter (frame units)
-        self.swipe_hist = collections.deque()  # (t, x, y) palm positions in scroll / swipe pose
+        self.swipe_hist = collections.deque()  # (t, x, y, roll, pitch) in scroll / swipe pose
+        self.pf = OneEuro(1.0, 0.02)           # pitch filter (degrees)
+        self.tilt_rest = None                  # pitch where tilt scrolling is still
+        self.tilt_rest_t = 0.0                 # last time it was used
+        self.tilt = 0.0                        # current tilt past the rest position (HUD)
         self.swipe_ready_at = 0.0
         self.flash, self.flash_until = "", 0.0 # short on-screen message (e.g. swipe)
         self.last_seen = 0.0
@@ -418,16 +452,34 @@ class GestureEngine:
             self.release_all()
         self.prev = None
 
-    def _flick(self, ax, ay, t, enabled=True):
-        """Track the palm; on a quick, mostly horizontal flick return True (hand
-        moved left: next desktop / forward) or False (right). Otherwise None."""
+    def _swipe_motion(self):
+        """Sideways and vertical motion over the last SWIPE_WINDOW, in units where
+        1 = a full swipe: hand travel / SWIPE_DIST plus finger swing / SWIPE_ANGLE.
+        Also returns just the sideways swing in degrees."""
         h = self.swipe_hist
-        h.append((t, ax, ay))
+        _, x0, y0, r0, p0 = h[0]
+        _, x1, y1, r1, p1 = h[-1]
+        # sx is signed (direction of the swipe); sy only needs a size, and both of
+        # its parts count as vertical, so add magnitudes: they must not cancel.
+        sx, sy, swing = (x1 - x0) / SWIPE_DIST, abs(y1 - y0) / SWIPE_DIST, 0.0
+        if r0 is not None and r1 is not None:
+            swing = _angle_diff(r1, r0)
+            sx += swing / SWIPE_ANGLE
+            sy += abs(p1 - p0) / SWIPE_ANGLE
+        return sx, sy, swing
+
+    def _flick(self, ax, ay, angles, t, enabled=True):
+        """Track the wrist and the hand's angles; on a quick, mostly horizontal
+        flick (hand travel, a sideways swing of the fingers, or both) return True
+        (moved left: next desktop / forward) or False (right). Otherwise None."""
+        h = self.swipe_hist
+        roll, pitch = angles if angles else (None, None)
+        h.append((t, ax, ay, roll, pitch))
         while h and t - h[0][0] > SWIPE_WINDOW:
             h.popleft()
-        sx, sy = ax - h[0][1], ay - h[0][2]
+        sx, sy, _ = self._swipe_motion()
         if (enabled and t >= self.swipe_ready_at
-                and abs(sx) > SWIPE_DIST and abs(sx) > 2 * abs(sy)):
+                and abs(sx) > 1 and abs(sx) > 2 * abs(sy)):
             self.swipe_ready_at = t + SWIPE_COOLDOWN
             h.clear()
             return sx < 0   # hand moves left -> content follows -> next desktop / forward
@@ -438,19 +490,23 @@ class GestureEngine:
         self.flash = "DESKTOP >" if nxt else "< DESKTOP"
         self.flash_until = t + 0.7
 
-    def _scroll_and_swipe(self, ax, ay, raw_pose, dt, t):
+    def _scroll_and_swipe(self, ax, ay, angles, raw_pose, dt, t):
         cfg, m = self.cfg, self.mouse
         if self.scroll_prev is None:   # entering the pose: stop any coasting
             m.scroll_momentum(0)
             self.sf.reset()
+            self.pf.reset()
             self.swipe_hist.clear()
             self.scroll_v = 0.0
+            # A pose that flickers off for a moment mid-tilt keeps its rest position.
+            if t - self.tilt_rest_t > 1.0:
+                self.tilt_rest = None
         y = self.sf(ay, t)
         self.mode = "scroll"
 
         # Swipe: a quick, mostly horizontal flick.
         h = self.swipe_hist
-        nxt = self._flick(ax, ay, t, enabled=cfg.swipe_action != "off")
+        nxt = self._flick(ax, ay, angles, t, enabled=cfg.swipe_action != "off")
         if nxt is not None:
             if cfg.swipe_action == "browser":
                 m.hotkey(KEY_RBRACKET if nxt else KEY_LBRACKET, "cmd")
@@ -460,11 +516,30 @@ class GestureEngine:
                 self._switch_desktop(nxt, t)
             m.scroll_momentum(0)
             self.scroll_v = 0.0
-        sideways = len(h) > 1 and abs(ax - h[0][1]) > 1.5 * abs(ay - h[0][2]) and abs(ax - h[0][1]) > 0.03
+        sideways = len(h) > 1 and ((abs(ax - h[0][1]) > 1.5 * abs(ay - h[0][2]) and abs(ax - h[0][1]) > 0.03)
+                                   or abs(self._swipe_motion()[2]) > SWIPE_ANGLE / 2)
+        settled = raw_pose == "scroll" and not sideways and t >= self.swipe_ready_at - SWIPE_COOLDOWN + 0.4
+
+        # Tilt scroll: like a joystick, lean the fingers toward the camera to scroll
+        # down, away to scroll up; the further, the faster. Hold the tilt to keep going.
+        self.tilt = 0.0
+        if angles is not None:
+            pitch = self.pf(angles[1], t)
+            if self.tilt_rest is None:
+                self.tilt_rest = pitch
+            self.tilt_rest_t = t
+            off = pitch - self.tilt_rest
+            if abs(off) <= TILT_DEADZONE:
+                self.tilt_rest += off * min(dt / TILT_ADAPT, 1.0)
+            else:
+                self.tilt = off
+                if settled:
+                    f = min((abs(off) - TILT_DEADZONE) / TILT_FULL, TILT_MAX)
+                    rate = -math.copysign(f * f * cfg.tilt_scroll_speed, off)
+                    m.scroll(rate * (-1 if cfg.invert_scroll else 1) * dt)
 
         # Scroll speed follows hand speed (smoothed, with a small dead zone).
-        if self.scroll_prev is not None and raw_pose == "scroll" and not sideways \
-                and t >= self.swipe_ready_at - SWIPE_COOLDOWN + 0.4:
+        if self.scroll_prev is not None and settled:
             v = (y - self.scroll_prev) / dt                       # frame heights / s
             v = math.copysign(max(abs(v) - SCROLL_DEADZONE, 0.0), v)
             px_per_s = v * cfg.scroll_speed * (-1 if cfg.invert_scroll else 1)
@@ -497,10 +572,11 @@ class GestureEngine:
         elif self.palm_n >= PALM_FRAMES:
             self.facing_away = False
 
-    def update(self, lms, frame_aspect, t, handedness=None):
+    def update(self, lms, frame_aspect, t, handedness=None, world=None):
         """lms: 21 (x, y) normalized landmarks of a mirrored frame, or None.
         handedness: MediaPipe's "Left"/"Right" label for the hand; if given, a
-        hand showing its back to the camera is ignored."""
+        hand showing its back to the camera is ignored. world: the matching 21
+        (x, y, z) 3D world landmarks; if given, tilting the hand scrolls and swipes."""
         cfg, m = self.cfg, self.mouse
 
         if lms is not None and handedness and not cfg.allow_back_of_hand:
@@ -569,6 +645,10 @@ class GestureEngine:
         # noise, and the palm stays put when you pinch, so clicks land on target.
         ax = sum(lms[i][0] for i in PALM) / len(PALM)
         ay = sum(lms[i][1] for i in PALM) / len(PALM)
+        # Scrolls and swipes follow the wrist instead: it stays put when the hand
+        # tilts, so tilting doesn't also count as moving.
+        wx, wy = lms[WRIST]
+        angles = hand_angles(world) if world is not None and not cfg.no_tilt else None
         tx, ty = self._to_screen(ax, ay, frame_aspect)
         tx, ty = self.fx(tx, t), self.fy(ty, t)
         delta = (0.0, 0.0) if self.prev is None else (tx - self.prev[0], ty - self.prev[1])
@@ -625,7 +705,7 @@ class GestureEngine:
 
         # --- Scroll / swipe: peace sign (index + middle up, ring + pinky folded) ---
         if self.pose == "scroll":
-            self._scroll_and_swipe(ax, ay, raw_pose, dt, t)
+            self._scroll_and_swipe(wx, wy, angles, raw_pose, dt, t)
             return
         if self.scroll_prev is not None:   # just left the pose: let a flick coast
             if abs(self.scroll_v) > MOMENTUM_MIN:
@@ -640,7 +720,7 @@ class GestureEngine:
                 m.scroll_momentum(0)
                 self.swipe_hist.clear()
             self.mode = "swipe"     # cursor holds still, like a trackpad swipe
-            nxt = self._flick(ax, ay, t)
+            nxt = self._flick(wx, wy, angles, t)
             if nxt is not None:
                 self._switch_desktop(nxt, t)
             return
@@ -789,7 +869,10 @@ def draw_hud(frame, engine, lms, fps, trusted=True):
     if time.monotonic() < engine.flash_until:
         (tw, _), _ = cv2.getTextSize(engine.flash, cv2.FONT_HERSHEY_SIMPLEX, 1.4, 3)
         cv2.putText(frame, engine.flash, ((w - tw) // 2, h // 2), cv2.FONT_HERSHEY_SIMPLEX, 1.4, (255, 255, 255), 3)
-    if engine.metrics:
+    if engine.mode == "scroll" and engine.tilt_rest is not None:
+        txt = f"tilt {engine.tilt:+.0f}" if engine.tilt else "tilt to scroll"
+        cv2.putText(frame, txt, (w // 2 - 90, 23), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+    elif engine.metrics:
         txt = f"pinch L {engine.metrics['left']:.2f}  R {engine.metrics['right']:.2f}"
         cv2.putText(frame, txt, (w // 2 - 90, 23), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
     cv2.putText(frame, f"{fps:4.0f} fps", (w - 85, 23), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
@@ -823,6 +906,11 @@ def parse_args(argv=None):
     p.add_argument("--release-freeze", type=float, default=0.15, help="seconds the cursor holds after a click")
     p.add_argument("--scroll-speed", type=float, default=3500, help="scroll px per full frame height of motion")
     p.add_argument("--invert-scroll", action="store_true", help="reverse scroll direction")
+    p.add_argument("--tilt-scroll-speed", type=float, default=1200,
+                   help="scroll px/s with the peace sign tilted 30 degrees (default 1200); "
+                        "tilting further goes faster")
+    p.add_argument("--no-tilt", action="store_true",
+                   help="tilting the hand doesn't scroll or swipe; only moving it does")
     p.add_argument("--swipe-action", choices=("desktops", "browser", "off"), default="desktops",
                    help="what a peace-sign sideways flick does: switch desktops (Ctrl+arrows, default), "
                         "browser back/forward (Cmd+[ / ]), or nothing")
@@ -894,7 +982,9 @@ def main(argv=None):
                 result = landmarker.detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb), ts)
                 lms = [(l.x, l.y) for l in result.hand_landmarks[0]] if result.hand_landmarks else None
                 handed = result.handedness[0][0].category_name if lms and result.handedness else None
-                engine.update(lms, frame.shape[1] / frame.shape[0], now, handed)
+                world = ([(l.x, l.y, l.z) for l in result.hand_world_landmarks[0]]
+                         if lms and result.hand_world_landmarks else None)
+                engine.update(lms, frame.shape[1] / frame.shape[0], now, handed, world)
 
                 if not trusted and now - last_trust_check > 2:   # pick up a newly granted permission
                     trusted, last_trust_check = accessibility_trusted(), now
