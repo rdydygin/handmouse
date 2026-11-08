@@ -471,6 +471,8 @@ class GestureEngine:
             self.back_n, self.palm_n = self.back_n + 1, 0
         elif side > PALM_SIDE_MIN:
             self.palm_n, self.back_n = self.palm_n + 1, 0
+        else:   # edge-on: keep the current state, but the run of evidence is broken
+            self.back_n = self.palm_n = 0
         if self.back_n >= BACK_FRAMES:
             self.facing_away = True
         elif self.palm_n >= PALM_FRAMES:
@@ -496,6 +498,7 @@ class GestureEngine:
 
         if lms is None:
             self._hand_gone(t)
+            self.back_n = self.palm_n = 0
             self.mode = "paused" if self.paused else "no hand"
             return
         self.last_seen = t
