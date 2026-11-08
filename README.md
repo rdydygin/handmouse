@@ -71,7 +71,8 @@ Hold one hand up, palm toward the camera, about 40–70 cm from the screen. Eith
 | Drag          | Pinch thumb + index, move, release. |
 | Right click   | Tap thumb and **middle** fingertips together. |
 | Scroll        | ✌️ Peace sign (index + middle up, ring + pinky folded), then move your hand up/down. Faster hand = faster scroll. Flick and then drop the peace sign to let it coast, like a trackpad. Make the peace sign again (or click) to stop the coasting. |
-| Swipe         | ✌️ Peace sign + a quick flick **left or right**: switches desktops / full-screen apps (like a 3-finger trackpad swipe). Flick left = next desktop, right = previous. Can be set to browser back/forward instead. |
+| Switch desktop | 🤟 **Three fingers** up (index + middle + ring, pinky folded or bent) + a quick flick **left or right**: switches desktops / full-screen apps, like a 3-finger trackpad swipe. Flick left = next desktop, right = previous. The cursor holds still while you hold three fingers up. |
+| Swipe         | ✌️ Peace sign + a quick flick **left or right** also switches desktops. Can be set to browser back/forward instead, so the two swipes do different things. |
 | Re-center     | ✊ Make a fist: the cursor stays put while you move your hand back to a comfortable spot. Open your hand to continue. Like lifting a mouse off the desk. |
 | Pause/resume  | Press `p` or space in the Hand Mouse window. |
 | Quit          | Press `q` or Esc in the Hand Mouse window (or ⌘Q, or close the window). |
@@ -92,7 +93,8 @@ In the app, put these in the settings file (press `s`). From Terminal, pass them
 | `--absolute` | off | Hand position maps directly to screen position, instead of trackpad-style relative movement. |
 | `--pinch-on 0.33` | 0.28 | Make clicks trigger more easily. Lower it if you get accidental clicks. |
 | `--invert-scroll` | off | Flip scroll direction. |
-| `--swipe-action browser` | desktops | Make swipes go back/forward in the browser and Finder (⌘[ / ⌘]) instead of switching desktops. `off` disables swipes. |
+| `--swipe-action browser` | desktops | Make peace-sign swipes go back/forward in the browser and Finder (⌘[ / ⌘]) instead of switching desktops. `off` disables peace-sign swipes. |
+| `--no-three-finger-swipe` | off | Turn off the three-finger flick that switches desktops. |
 | `--scroll-speed 5000` | 3500 | Faster scrolling. |
 | `--camera 1` | 0 | Use a different camera, e.g. if an iPhone Continuity Camera took index 0. |
 | `--dry-run` | off | Track and print actions without touching the mouse. |
@@ -111,7 +113,7 @@ Example: `./run.sh --speed 1.4 --smoothing 1.3`
 
 - `hand_mouse.py`: the whole app. MediaPipe Hand Landmarker finds 21 hand points per camera frame.
   A gesture engine turns them into pointer motion (palm centre, One Euro filter, pointer
-  acceleration), pinch clicks (with hysteresis), and scroll and swipe poses (debounced). A 120 Hz
+  acceleration), pinch clicks (with hysteresis), and scroll, three-finger swipe and fist poses (debounced). A 120 Hz
   thread glides the cursor and scroll between camera frames. Events are posted with macOS Quartz
   (`CGEventPost`), so drags, double-clicks and smooth scrolling behave like real hardware.
 - `assets/launcher.sh`: the app's executable. On first launch it installs a private Python 3.12 and

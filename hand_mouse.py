@@ -10,8 +10,10 @@ Gestures (palm toward the camera, either hand):
   Right click   tap thumb + middle fingertips
   Scroll        "peace sign" (index + middle up, others folded), move hand up/down;
                 flick and change pose to let it coast, like a trackpad
-  Swipe         peace sign + quick flick left/right: switch desktops
-                (or browser back/forward with --swipe-action browser)
+  Swipe         three fingers up (index + middle + ring, pinky folded) + quick
+                flick left/right: switch desktops, like a 3-finger trackpad swipe
+                (the peace sign flicks too; --swipe-action browser makes the
+                peace-sign flick go back/forward in the browser instead)
   Clutch        make a fist: the cursor stops so you can re-center your hand,
                 like lifting a mouse off the desk
 
@@ -64,7 +66,7 @@ GAIN_MIN, GAIN_MAX, V_LOW, V_HIGH = 0.2, 1.6, 80, 900
 # flick faster than MOMENTUM_MIN px/s coasts, fading over MOMENTUM_DECAY s.
 SCROLL_DEADZONE, SCROLL_GLIDE = 0.04, 0.05
 MOMENTUM_MIN, MOMENTUM_DECAY = 700, 0.35
-# Swipes: peace sign moved sideways by SWIPE_DIST of the frame width within
+# Swipes: peace sign or three fingers moved sideways by SWIPE_DIST of the frame width within
 # SWIPE_WINDOW seconds, mostly horizontally. One swipe per SWIPE_COOLDOWN seconds.
 SWIPE_DIST, SWIPE_WINDOW, SWIPE_COOLDOWN = 0.13, 0.3, 0.8
 KEY_LEFT, KEY_RIGHT, KEY_LBRACKET, KEY_RBRACKET = 123, 124, 33, 30
@@ -339,7 +341,8 @@ class GestureEngine:
         self.scroll_prev = None
         self.scroll_v = 0.0                    # recent scroll speed, px/s
         self.sf = OneEuro(1.5, 0.8)            # scroll-position filter (frame units)
-        self.swipe_hist = collections.deque()  # (t, x, y) palm positions in scroll pose
+        self.swipe_hist = collections.deque()  # (t, x, y) palm positions in scroll / swipe pose
+        self.in_swipe = False                  # holding the three-finger swipe pose
         self.swipe_ready_at = 0.0
         self.flash, self.flash_until = "", 0.0 # short on-screen message (e.g. swipe)
         self.last_seen = 0.0
@@ -371,6 +374,26 @@ class GestureEngine:
             self.release_all()
         self.prev = None
 
+    def _flick(self, ax, ay, t, enabled=True):
+        """Track the palm; on a quick, mostly horizontal flick return True (hand
+        moved left: next desktop / forward) or False (right). Otherwise None."""
+        h = self.swipe_hist
+        h.append((t, ax, ay))
+        while h and t - h[0][0] > SWIPE_WINDOW:
+            h.popleft()
+        sx, sy = ax - h[0][1], ay - h[0][2]
+        if (enabled and t >= self.swipe_ready_at
+                and abs(sx) > SWIPE_DIST and abs(sx) > 2 * abs(sy)):
+            self.swipe_ready_at = t + SWIPE_COOLDOWN
+            h.clear()
+            return sx < 0   # hand moves left -> content follows -> next desktop / forward
+        return None
+
+    def _switch_desktop(self, nxt, t):
+        self.mouse.hotkey(KEY_RIGHT if nxt else KEY_LEFT, "ctrl")
+        self.flash = "DESKTOP >" if nxt else "< DESKTOP"
+        self.flash_until = t + 0.7
+
     def _scroll_and_swipe(self, ax, ay, raw_pose, dt, t):
         cfg, m = self.cfg, self.mouse
         if self.scroll_prev is None:   # entering the pose: stop any coasting
@@ -383,23 +406,15 @@ class GestureEngine:
 
         # Swipe: a quick, mostly horizontal flick.
         h = self.swipe_hist
-        h.append((t, ax, ay))
-        while h and t - h[0][0] > SWIPE_WINDOW:
-            h.popleft()
-        sx, sy = ax - h[0][1], ay - h[0][2]
-        if (cfg.swipe_action != "off" and t >= self.swipe_ready_at
-                and abs(sx) > SWIPE_DIST and abs(sx) > 2 * abs(sy)):
-            nxt = sx < 0   # hand moves left -> content follows -> next desktop / forward
+        nxt = self._flick(ax, ay, t, enabled=cfg.swipe_action != "off")
+        if nxt is not None:
             if cfg.swipe_action == "browser":
                 m.hotkey(KEY_RBRACKET if nxt else KEY_LBRACKET, "cmd")
                 self.flash = "FORWARD >" if nxt else "< BACK"
+                self.flash_until = t + 0.7
             else:
-                m.hotkey(KEY_RIGHT if nxt else KEY_LEFT, "ctrl")
-                self.flash = "DESKTOP >" if nxt else "< DESKTOP"
-            self.flash_until = t + 0.7
-            self.swipe_ready_at = t + SWIPE_COOLDOWN
+                self._switch_desktop(nxt, t)
             m.scroll_momentum(0)
-            h.clear()
             self.scroll_v = 0.0
         sideways = len(h) > 1 and abs(ax - h[0][1]) > 1.5 * abs(ay - h[0][2]) and abs(ax - h[0][1]) > 0.03
 
@@ -427,6 +442,7 @@ class GestureEngine:
                 self.prev = None
                 self.fx.reset(); self.fy.reset()
             self.scroll_prev, self.scroll_v = None, 0.0
+            self.in_swipe = False
             self.mode = "paused" if self.paused else "no hand"
             return
         self.last_seen = t
@@ -445,6 +461,10 @@ class GestureEngine:
         folded = {f: r < 0.95 for f, r in ratio.items()}
         if ext["index"] and ext["middle"] and folded["ring"] and folded["pinky"]:
             raw_pose = "scroll"
+        # Three fingers up. Few people can fold the pinky all the way with the ring
+        # finger straight, so a pinky that's merely bent counts.
+        elif ext["index"] and ext["middle"] and ext["ring"] and ratio["pinky"] < 1.05:
+            raw_pose = "swipe"
         elif all(folded.values()):
             raw_pose = "fist"
         else:
@@ -536,6 +556,19 @@ class GestureEngine:
             if abs(self.scroll_v) > MOMENTUM_MIN:
                 m.scroll_momentum(self.scroll_v)
             self.scroll_prev, self.scroll_v = None, 0.0
+
+        # --- Three-finger swipe: flick left/right to switch desktops ---
+        if self.pose == "swipe" and not cfg.no_three_finger_swipe:
+            if not self.in_swipe:   # entering the pose: stop any coasting
+                self.in_swipe = True
+                m.scroll_momentum(0)
+                self.swipe_hist.clear()
+            self.mode = "swipe"     # cursor holds still, like a trackpad swipe
+            nxt = self._flick(ax, ay, t)
+            if nxt is not None:
+                self._switch_desktop(nxt, t)
+            return
+        self.in_swipe = False
 
         # --- Fist: clutch (cursor holds still) ---
         if self.pose == "fist":
@@ -660,7 +693,7 @@ def open_camera(source):
 def draw_hud(frame, engine, lms, fps, trusted=True):
     h, w = frame.shape[:2]
     colors = {"move": (80, 220, 80), "click": (0, 200, 255), "drag": (0, 140, 255),
-              "right click": (255, 120, 0), "scroll": (255, 0, 200),
+              "right click": (255, 120, 0), "scroll": (255, 0, 200), "swipe": (0, 220, 220),
               "fist (hold)": (180, 180, 180), "paused": (0, 0, 255), "no hand": (120, 120, 120)}
     color = colors.get(engine.mode, (255, 255, 255))
     if engine.cfg.absolute:
@@ -711,8 +744,10 @@ def parse_args(argv=None):
     p.add_argument("--scroll-speed", type=float, default=3500, help="scroll px per full frame height of motion")
     p.add_argument("--invert-scroll", action="store_true", help="reverse scroll direction")
     p.add_argument("--swipe-action", choices=("desktops", "browser", "off"), default="desktops",
-                   help="what a sideways flick does: switch desktops (Ctrl+arrows, default), "
+                   help="what a peace-sign sideways flick does: switch desktops (Ctrl+arrows, default), "
                         "browser back/forward (Cmd+[ / ]), or nothing")
+    p.add_argument("--no-three-finger-swipe", action="store_true",
+                   help="turn off the three-finger flick that switches desktops")
     p.add_argument("--no-preview", action="store_true", help="don't show the camera window (Ctrl+C to quit)")
     p.add_argument("--dry-run", action="store_true", help="track and print actions, don't move the mouse")
     p.add_argument("--model", help=argparse.SUPPRESS)
