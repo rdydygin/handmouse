@@ -27,6 +27,17 @@ Hand tracking runs entirely on your Mac (Google MediaPipe); nothing is uploaded.
 
 To quit, press `q` in the Hand Mouse window, close the window, or press ⌘Q.
 
+### Updates
+
+Hand Mouse updates itself. About once a day, while it's running, it checks the
+[latest release](https://github.com/rdydygin/handmouse/releases/latest) in the background. When a
+newer version is out, it downloads it and installs it the next time you open Hand Mouse; a
+notification confirms the new version. Your settings are kept. To turn this off, add the line
+`--no-auto-update` to the settings file.
+
+Updates are only installed when the app can replace itself: keep it in **Applications** and run it
+from an account that can change that folder (an admin account).
+
 ### Settings
 
 Press `s` in the Hand Mouse window to open the settings file in TextEdit. Remove the `#` in front of
@@ -105,8 +116,24 @@ Example: `./run.sh --speed 1.4 --smoothing 1.3`
   (`CGEventPost`), so drags, double-clicks and smooth scrolling behave like real hardware.
 - `assets/launcher.sh`: the app's executable. On first launch it installs a private Python 3.12 and
   the dependencies with [uv](https://github.com/astral-sh/uv) into `~/Library/Application Support/HandMouse`.
+  It also does the auto-update: it checks the GitHub releases API, downloads `Hand-Mouse-app.zip`
+  into `~/Library/Application Support/HandMouse/update`, and swaps the new app in on the next launch.
 - `build_app.sh`: assembles `Hand Mouse.app` (Info.plist with the camera usage text, icon, model).
+- `.github/workflows/release.yml`: builds the app and publishes a GitHub release when a version tag
+  is pushed. Installed apps update from these releases.
 - `run.sh`: runs from Terminal for development.
+
+## Publishing a release
+
+1. Bump `VERSION` in `build_app.sh` (e.g. `1.5`) and commit.
+2. Tag and push:
+
+   ```bash
+   git tag v1.5 && git push origin v1.5
+   ```
+
+GitHub Actions builds `Hand-Mouse-app.zip` and publishes the release. Installed copies pick it up
+within a day. The tag must match `VERSION`, or the workflow stops.
 
 ## Troubleshooting
 
@@ -119,6 +146,9 @@ Example: `./run.sh --speed 1.4 --smoothing 1.3`
   `tccutil reset Camera local.handmouse.app`
 - **Setup failed or the app quits right away**: the log is at `~/Library/Logs/HandMouse.log`.
   To reinstall from scratch, delete `~/Library/Application Support/HandMouse` and open the app again.
+- **Not updating**: the log (`~/Library/Logs/HandMouse.log`) has an `Update check:` line for each
+  check. Updates are skipped if `--no-auto-update` is in settings, if the app can't be replaced
+  (not in Applications, or a non-admin account), or if it's running straight from Downloads.
 - **Wrong camera** (e.g. your iPhone via Continuity Camera): set `--camera 1` in settings.
 - **Running from Terminal on an Intel Mac and the install fails**: MediaPipe needs Python 3.12 or
   older there: `brew install python@3.12 && rm -rf .venv && ./run.sh`. The app handles this itself.
