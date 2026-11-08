@@ -108,6 +108,10 @@ TILT_DEADZONE, TILT_FULL, TILT_MAX, TILT_ADAPT = 10, 20, 2.0, 2.0
 # this for palm) counts; in between (hand edge-on) is ambiguous. Frames in a row
 # needed to stop tracking / resume it: quick to let go, slower to pick back up.
 PALM_SIDE_MIN, BACK_FRAMES, PALM_FRAMES = 0.2, 2, 3
+# Hand tracking is nearly all the CPU the app uses, and costs the same with or
+# without a hand in view. Once no hand has been seen for IDLE_AFTER seconds, only
+# look for one every IDLE_DETECT_INTERVAL seconds (the preview stays live).
+IDLE_AFTER, IDLE_DETECT_INTERVAL = 2.0, 0.09   # ~10 checks a second
 KEY_LEFT, KEY_RIGHT, KEY_LBRACKET, KEY_RBRACKET = 123, 124, 33, 30
 HAND_CONNECTIONS = [(0, 1), (1, 2), (2, 3), (3, 4), (0, 5), (5, 6), (6, 7), (7, 8),
                     (5, 9), (9, 10), (10, 11), (11, 12), (9, 13), (13, 14), (14, 15),
@@ -252,6 +256,7 @@ class SmoothMouse:
         self._scroll_pending = 0.0   # px still to scroll
         self._scroll_carry = 0.0     # fraction of a px not yet sent
         self._momentum = 0.0         # px/s of coasting scroll
+        self._wake = threading.Event()   # set when there's gliding or scrolling to do
         threading.Thread(target=self._run, daemon=True).start()
 
     @property
@@ -267,7 +272,8 @@ class SmoothMouse:
             time.sleep(dt)
             with self._lock:
                 dx, dy = self.x - self.b.x, self.y - self.b.y
-                if abs(dx) > 0.3 or abs(dy) > 0.3:
+                busy = abs(dx) > 0.3 or abs(dy) > 0.3
+                if busy:
                     self.b.move(self.b.x + dx * alpha, self.b.y + dy * alpha)
                 # Scroll: spread each camera frame's amount over several ticks,
                 # and let a flick coast to a stop.
@@ -284,11 +290,17 @@ class SmoothMouse:
                     if n:
                         self.b.scroll(n)
                         self._scroll_carry -= n
+                # Nothing left to do: sleep until move() or scroll() hands over more,
+                # instead of waking 120 times a second while the cursor is still.
+                if not (busy or self._momentum or self._scroll_pending):
+                    self._wake.clear()
+            self._wake.wait()
 
     def move(self, x, y):
         with self._lock:
             self.x = min(max(x, 0), self.width - 1)
             self.y = min(max(y, 0), self.height - 1)
+            self._wake.set()
 
     def _snap(self):   # buttons act exactly where the cursor is headed
         if abs(self.x - self.b.x) > 0.3 or abs(self.y - self.b.y) > 0.3:
@@ -309,6 +321,7 @@ class SmoothMouse:
     def scroll(self, pixels):
         with self._lock:
             self._scroll_pending += pixels
+            self._wake.set()
 
     def scroll_momentum(self, velocity):
         """Coast at `velocity` px/s, slowing to a stop. 0 stops any coasting."""
@@ -316,6 +329,7 @@ class SmoothMouse:
             self._momentum = velocity
             if not velocity:
                 self._scroll_pending = 0.0
+            self._wake.set()
 
     def hotkey(self, keycode, modifier):
         with self._lock:
@@ -958,6 +972,8 @@ def main(argv=None):
     win = "Hand Mouse"
     t0, last_ts, fps, prev_t, fails = time.monotonic(), -1, 0.0, time.monotonic(), 0
     last_trust_check, window_seen = time.monotonic(), False
+    live = str(cfg.camera).isdigit()   # video files (testing) get every frame tracked
+    last_hand = last_detect = time.monotonic()
     print(f"Hand Mouse {VERSION}")
     print(__doc__)
 
@@ -976,14 +992,20 @@ def main(argv=None):
                 fails = 0
                 frame = cv2.flip(frame, 1)   # mirror: moving right moves the cursor right
                 now = time.monotonic()
-                ts = max(int((now - t0) * 1000), last_ts + 1)
-                last_ts = ts
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                result = landmarker.detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb), ts)
-                lms = [(l.x, l.y) for l in result.hand_landmarks[0]] if result.hand_landmarks else None
-                handed = result.handedness[0][0].category_name if lms and result.handedness else None
-                world = ([(l.x, l.y, l.z) for l in result.hand_world_landmarks[0]]
-                         if lms and result.hand_world_landmarks else None)
+                lms = handed = world = None
+                idle = live and now - last_hand > IDLE_AFTER and now - last_detect < IDLE_DETECT_INTERVAL
+                if not idle:
+                    last_detect = now
+                    ts = max(int((now - t0) * 1000), last_ts + 1)
+                    last_ts = ts
+                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    result = landmarker.detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb), ts)
+                    if result.hand_landmarks:
+                        last_hand = now
+                        lms = [(l.x, l.y) for l in result.hand_landmarks[0]]
+                        handed = result.handedness[0][0].category_name if result.handedness else None
+                        world = ([(l.x, l.y, l.z) for l in result.hand_world_landmarks[0]]
+                                 if result.hand_world_landmarks else None)
                 engine.update(lms, frame.shape[1] / frame.shape[0], now, handed, world)
 
                 if not trusted and now - last_trust_check > 2:   # pick up a newly granted permission
