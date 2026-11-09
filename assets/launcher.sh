@@ -22,6 +22,8 @@ UPDATE_ASSET=Hand-Mouse-app.zip
 UPDATE_URL="${HANDMOUSE_UPDATE_URL:-https://api.github.com/repos/$REPO/releases/latest}"
 UPDATES="$SUPPORT/update"
 STAGED="$UPDATES/Hand Mouse.app"
+STATUS="$UPDATES/status"          # update status shown in the Hand Mouse window
+CHECK_NOW="$UPDATES/check-now"    # created by the app when you press U
 
 mkdir -p "$SUPPORT" "$LOGDIR"
 if [ -f "$LOG" ] && [ "$(wc -c < "$LOG")" -gt 2000000 ]; then mv -f "$LOG" "$LOG.old"; fi
@@ -49,14 +51,28 @@ version_gt() {  # true if version $1 is newer than version $2
 CURRENT_VERSION=$(plist_version "$APP")
 echo "Version ${CURRENT_VERSION:-unknown} at $APP"
 
-auto_update_enabled() {
-  [ -z "${HANDMOUSE_NO_UPDATE:-}" ] || return 1
-  [ -n "$CURRENT_VERSION" ] || return 1
-  if [ -f "$SETTINGS" ] && sed -e 's/#.*//' "$SETTINGS" | grep -q -- '--no-auto-update'; then return 1; fi
+OFF_REASON=""
+auto_update_enabled() {  # sets OFF_REASON when it returns false
+  OFF_REASON=""
+  if [ -n "${HANDMOUSE_NO_UPDATE:-}" ]; then OFF_REASON="turned off"; return 1; fi
+  if [ -z "$CURRENT_VERSION" ]; then OFF_REASON="unknown version"; return 1; fi
+  if [ -f "$SETTINGS" ] && sed -e 's/#.*//' "$SETTINGS" | grep -q -- '--no-auto-update'; then
+    OFF_REASON="turned off in settings"; return 1
+  fi
   # Not while running from a read-only, translocated copy, or where we can't replace the app.
-  case "$APP" in */AppTranslocation/*) return 1 ;; esac
-  [ -w "$APP" ] && [ -w "$(dirname "$APP")" ]
+  case "$APP" in */AppTranslocation/*) OFF_REASON="move the app to Applications"; return 1 ;; esac
+  if [ ! -w "$APP" ] || [ ! -w "$(dirname "$APP")" ]; then
+    OFF_REASON="the app can't replace itself here"; return 1
+  fi
 }
+
+# One line "<state>|<text>", read by hand_mouse.py. States: checking, current,
+# downloading, ready, available, error, off.
+set_status() {
+  mkdir -p "$UPDATES"
+  printf '%s|%s\n' "$1" "$2" > "$STATUS.tmp" && mv -f "$STATUS.tmp" "$STATUS"
+}
+status_state() { [ -f "$STATUS" ] && sed -n '1s/|.*//p' "$STATUS"; }
 
 # ---- install an update downloaded on a previous run -----------------------
 if [ -d "$STAGED" ]; then
@@ -84,20 +100,33 @@ fi
 if [ -n "${HANDMOUSE_UPDATED_TO:-}" ]; then
   unset HANDMOUSE_UPDATED_TO
   rm -rf "$UPDATES/previous.app"
+  set_status current "Updated to $CURRENT_VERSION"
   osascript -e "display notification \"Updated to version $CURRENT_VERSION.\" with title \"Hand Mouse\"" >/dev/null 2>&1 &
 fi
 
 # ---- check for a newer release (runs in the background, see the end) ------
+# check_for_update [force]: without "force", at most once a day (once an hour
+# after a failed check). "force" is a check you asked for by pressing U.
 check_for_update() {
-  auto_update_enabled || return 0
+  local force="${1:-}" enabled=1 json latest url work
+  auto_update_enabled || enabled=""
+  if [ -z "$enabled" ] && [ -z "$force" ]; then
+    case "$(status_state)" in off|available) ;; *) set_status off "Auto-update off ($OFF_REASON)" ;; esac
+    return 0
+  fi
   mkdir -p "$UPDATES"
-  # At most once a day.
-  if [ -n "$(find "$UPDATES/.last-check" -mtime -1 2>/dev/null)" ]; then return 0; fi
+  if [ -z "$force" ]; then
+    local minutes=1440
+    [ "$(status_state)" = error ] && minutes=60
+    if [ -n "$(find "$UPDATES/.last-check" -mmin -$minutes 2>/dev/null)" ]; then return 0; fi
+  fi
 
-  local json latest url work
-  json=$(curl -fsSL --max-time 30 -H "Accept: application/vnd.github+json" "$UPDATE_URL") \
-    || { echo "Update check: could not reach GitHub"; return 0; }
+  set_status checking "Checking for updates..."
   touch "$UPDATES/.last-check"
+  if ! json=$(curl -fsSL --max-time 30 -H "Accept: application/vnd.github+json" "$UPDATE_URL"); then
+    echo "Update check: could not reach GitHub"
+    set_status error "Update check failed: no connection to GitHub"; return 0
+  fi
   set -- $(printf '%s' "$json" | "$VENV/bin/python" -c '
 import json, sys
 r = json.load(sys.stdin)
@@ -106,12 +135,24 @@ if url and not r.get("draft") and not r.get("prerelease"):
     print(r.get("tag_name", "").lstrip("vV"), url)
 ' "$UPDATE_ASSET" 2>/dev/null)
   latest="${1:-}"; url="${2:-}"
-  if [ -z "$url" ] || ! version_gt "$latest" "$CURRENT_VERSION"; then
-    echo "Update check: up to date (latest release ${latest:-unknown})"; return 0
+  if [ -z "$url" ] || ! is_version "$latest"; then
+    echo "Update check: no usable release found"
+    set_status error "Update check failed: no release found"; return 0
   fi
-  if [ "$(plist_version "$STAGED")" = "$latest" ]; then return 0; fi
+  if ! version_gt "$latest" "$CURRENT_VERSION"; then
+    echo "Update check: up to date (latest release $latest)"
+    set_status current "Up to date"; return 0
+  fi
+  if [ -z "$enabled" ]; then
+    echo "Update check: version $latest is available, but auto-update is off ($OFF_REASON)"
+    set_status available "Version $latest available (auto-update off: $OFF_REASON)"; return 0
+  fi
+  if [ "$(plist_version "$STAGED")" = "$latest" ]; then
+    set_status ready "Version $latest ready: reopen Hand Mouse to install"; return 0
+  fi
 
   echo "Update check: downloading version $latest"
+  set_status downloading "Downloading version $latest..."
   work="$UPDATES/download"
   rm -rf "$work"; mkdir -p "$work"
   if ! curl -fsSL --retry 3 --max-time 600 -o "$work/update.zip" "$url" \
@@ -119,13 +160,41 @@ if url and not r.get("draft") and not r.get("prerelease"):
      || [ ! -x "$work/unpacked/Hand Mouse.app/Contents/MacOS/HandMouse" ] \
      || [ "$(plist_version "$work/unpacked/Hand Mouse.app")" != "$latest" ]; then
     echo "Update check: download of $latest failed or was not a valid app"
+    set_status error "Download of version $latest failed"
     rm -rf "$work"; return 0
   fi
   xattr -cr "$work/unpacked/Hand Mouse.app" 2>/dev/null
   rm -rf "$STAGED"
-  mv "$work/unpacked/Hand Mouse.app" "$STAGED" && echo "Update check: version $latest will be installed on next launch"
+  if mv "$work/unpacked/Hand Mouse.app" "$STAGED"; then
+    echo "Update check: version $latest will be installed on next launch"
+    set_status ready "Version $latest ready: reopen Hand Mouse to install"
+  else
+    set_status error "Could not save version $latest"
+  fi
   rm -rf "$work"
 }
+
+# Checks once at launch, then about once a day while Hand Mouse runs, and right
+# away when you press U in its window. Ends when Hand Mouse quits.
+update_loop() {
+  while kill -0 "$1" 2>/dev/null; do
+    if [ -f "$CHECK_NOW" ]; then
+      rm -f "$CHECK_NOW"
+      echo "Update check: requested"
+      check_for_update force
+    else
+      check_for_update
+    fi
+    sleep 2
+  done
+}
+
+# Tidy up the status left by the previous run.
+rm -f "$CHECK_NOW"
+case "$(status_state)" in
+  checking|downloading) rm -f "$UPDATES/.last-check" ;;          # interrupted: check again now
+  ready) [ -d "$STAGED" ] || set_status current "Up to date" ;;  # installed or discarded since
+esac
 
 # ---- one-time setup -------------------------------------------------------
 export UV_PYTHON_INSTALL_DIR="$SUPPORT/python"
@@ -185,10 +254,12 @@ ARGS=$(sed -e 's/#.*//' -e 's/--no-auto-update//g' "$SETTINGS" | tr '\n' ' ')
 export HANDMOUSE_ICON="$RES/HandMouse.icns"
 export HANDMOUSE_SETTINGS="$SETTINGS"
 export HANDMOUSE_VERSION="${CURRENT_VERSION:-unknown}"
+export HANDMOUSE_UPDATE_STATUS="$STATUS"
+export HANDMOUSE_UPDATE_REQUEST="$CHECK_NOW"
 # shellcheck disable=SC2086  # ARGS is intentionally split into words
 "$VENV/bin/python" "$RES/hand_mouse.py" --app --model "$RES/hand_landmarker.task" $ARGS &
 CHILD=$!
-check_for_update &
+update_loop "$CHILD" &
 trap 'kill "$CHILD" 2>/dev/null' TERM INT HUP
 wait "$CHILD"
 CODE=$?
