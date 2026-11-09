@@ -12,8 +12,8 @@ Gestures (palm toward the camera, either hand):
                 fingers toward the camera (scroll down) or back (scroll up); the
                 further you tilt, the faster. Or move the hand up/down: flick and
                 change pose to let it coast, like a trackpad
-  Swipe         three fingers up (index + middle + ring, pinky folded) + quick
-                flick left/right: switch desktops, like a 3-finger trackpad swipe.
+  Swipe         four fingers up with the thumb tucked across the palm + quick
+                flick left/right: switch desktops, like a 4-finger trackpad swipe.
                 Swinging the fingers sideways from the wrist (like a windshield
                 wiper) is enough; the hand doesn't have to travel.
                 (the peace sign flicks too; --swipe-action browser makes the
@@ -92,7 +92,7 @@ GAIN_MIN, GAIN_MAX, V_LOW, V_HIGH = 0.2, 1.6, 80, 900
 # flick faster than MOMENTUM_MIN px/s coasts, fading over MOMENTUM_DECAY s.
 SCROLL_DEADZONE, SCROLL_GLIDE = 0.04, 0.05
 MOMENTUM_MIN, MOMENTUM_DECAY = 700, 0.35
-# Swipes: peace sign or three fingers moved sideways by SWIPE_DIST of the frame width within
+# Swipes: peace sign or four fingers moved sideways by SWIPE_DIST of the frame width within
 # SWIPE_WINDOW seconds, mostly horizontally. One swipe per SWIPE_COOLDOWN seconds.
 SWIPE_DIST, SWIPE_WINDOW, SWIPE_COOLDOWN = 0.13, 0.3, 0.8
 # Tilting instead of moving the hand (the wrist stays put, so the hand stays in view).
@@ -624,11 +624,19 @@ class GestureEngine:
                  for f, (pip, tip) in FINGERS.items()}
         ext = {f: r > 1.15 for f, r in ratio.items()}
         folded = {f: r < 0.95 for f, r in ratio.items()}
+        # Thumb tucked across the palm: how far its tip reaches from the index
+        # knuckle toward the pinky knuckle, in hand sizes. The middle knuckle is
+        # about 0.25 across, the ring knuckle 0.5; a relaxed thumb stays beside the
+        # index finger (0 or less). Turning the hand edge-on only shrinks it.
+        ix, iy = P[INDEX_MCP]
+        kx, ky = P[PINKY_MCP][0] - ix, P[PINKY_MCP][1] - iy
+        across = (((P[THUMB_TIP][0] - ix) * kx + (P[THUMB_TIP][1] - iy) * ky)
+                  / ((math.hypot(kx, ky) or 1e-6) * size))
         if ext["index"] and ext["middle"] and folded["ring"] and folded["pinky"]:
             raw_pose = "scroll"
-        # Three fingers up. Few people can fold the pinky all the way with the ring
-        # finger straight, so a pinky that's merely bent counts.
-        elif ext["index"] and ext["middle"] and ext["ring"] and ratio["pinky"] < 1.05:
+        # Four fingers up, thumb tucked. With every fingertip far from the thumb,
+        # it can't be mistaken for a pinch.
+        elif all(ext.values()) and across > 0.3:
             raw_pose = "swipe"
         elif all(folded.values()):
             raw_pose = "fist"
@@ -726,8 +734,8 @@ class GestureEngine:
                 m.scroll_momentum(self.scroll_v)
             self.scroll_prev, self.scroll_v = None, 0.0
 
-        # --- Three-finger swipe: flick left/right to switch desktops ---
-        if self.pose == "swipe" and not cfg.no_three_finger_swipe:
+        # --- Four-finger swipe (thumb tucked): flick left/right to switch desktops ---
+        if self.pose == "swipe" and not cfg.no_four_finger_swipe:
             # self.mode still holds the last frame's mode, so this catches every way
             # into the pose (from scrolling, a click, a lost hand...).
             if self.mode != "swipe":   # entering the pose: stop any coasting
@@ -1015,8 +1023,10 @@ def parse_args(argv=None):
     p.add_argument("--swipe-action", choices=("desktops", "browser", "off"), default="desktops",
                    help="what a peace-sign sideways flick does: switch desktops (Ctrl+arrows, default), "
                         "browser back/forward (Cmd+[ / ]), or nothing")
-    p.add_argument("--no-three-finger-swipe", action="store_true",
-                   help="turn off the three-finger flick that switches desktops")
+    p.add_argument("--no-four-finger-swipe", action="store_true",
+                   help="turn off the four-finger flick (thumb tucked) that switches desktops")
+    p.add_argument("--no-three-finger-swipe", dest="no_four_finger_swipe", action="store_true",
+                   help=argparse.SUPPRESS)   # old name, still in some settings files
     p.add_argument("--allow-back-of-hand", action="store_true",
                    help="track the hand even when its back faces the camera (default: only the palm side)")
     p.add_argument("--no-preview", action="store_true", help="don't show the camera window (Ctrl+C to quit)")

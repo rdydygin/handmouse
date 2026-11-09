@@ -241,7 +241,7 @@ if [ ! -f "$SETTINGS" ]; then
 # --no-tilt            tilting the hand doesn't scroll or swipe, only moving it does
 # --swipe-action browser   peace-sign flick = browser back/forward instead of switching desktops
 # --swipe-action off       turn peace-sign swipes off
-# --no-three-finger-swipe  turn off the three-finger flick that switches desktops
+# --no-four-finger-swipe   turn off the four-finger flick (thumb tucked) that switches desktops
 # --allow-back-of-hand    keep tracking the hand when its back faces the camera
 # --camera 1           use another camera (e.g. if an iPhone took over as camera 0)
 # --no-auto-update     don't download new versions of Hand Mouse automatically

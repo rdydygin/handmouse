@@ -76,7 +76,7 @@ Hold one hand up, palm toward the camera, about 40–70 cm from the screen. Eith
 | Drag          | Pinch thumb + index, move, release. |
 | Right click   | Tap thumb and **middle** fingertips together. |
 | Scroll        | ✌️ Peace sign (index + middle up, ring + pinky folded), then **tilt** your fingers toward the camera to scroll down, or back to scroll up, keeping your wrist where it is. It works like a joystick: tilt further to scroll faster, hold the tilt to keep scrolling, straighten up to stop. The top bar shows the tilt in degrees; small tilts (under about 10°) do nothing. You can also move your whole hand up/down instead: flick and then drop the peace sign to let it coast, like a trackpad. Make the peace sign again (or click) to stop the coasting. |
-| Switch desktop | 🤟 **Three fingers** up (index + middle + ring, pinky folded or bent) + a quick flick **left or right**: switches desktops / full-screen apps, like a 3-finger trackpad swipe. Flick left = next desktop, right = previous. A flick of the wrist is enough: swing your fingers sideways like a windshield wiper (about 20°) without moving your hand across the frame. The cursor holds still while you hold three fingers up. |
+| Switch desktop | **Four fingers** up with your **thumb tucked** across your palm (toward the base of your ring finger), then a quick flick **left or right**: switches desktops / full-screen apps, like a 4-finger trackpad swipe. Flick left = next desktop, right = previous. A flick of the wrist is enough: swing your fingers sideways like a windshield wiper (about 20°) without moving your hand across the frame. The cursor holds still while your thumb is tucked (the window shows `SWIPE`). |
 | Swipe         | ✌️ Peace sign + a quick flick **left or right** (a wrist flick is enough here too) also switches desktops. Can be set to browser back/forward instead, so the two swipes do different things. |
 | Re-center     | ✊ Make a fist: the cursor stays put while you move your hand back to a comfortable spot. Open your hand to continue. Like lifting a mouse off the desk. |
 | Ignore hand   | Turn the **back** of your hand to the camera: it isn't tracked (the window shows `BACK OF HAND`), so you can rest it or type without moving the cursor. Show your palm again to continue. |
@@ -102,7 +102,7 @@ In the app, put these in the settings file (press `s`). From Terminal, pass them
 | `--pinch-on 0.33` | 0.28 | Make clicks trigger more easily. Lower it if you get accidental clicks. |
 | `--invert-scroll` | off | Flip scroll direction. |
 | `--swipe-action browser` | desktops | Make peace-sign swipes go back/forward in the browser and Finder (⌘[ / ⌘]) instead of switching desktops. `off` disables peace-sign swipes. |
-| `--no-three-finger-swipe` | off | Turn off the three-finger flick that switches desktops. |
+| `--no-four-finger-swipe` | off | Turn off the four-finger flick (thumb tucked) that switches desktops. |
 | `--scroll-speed 5000` | 3500 | Faster scrolling when you move your hand. |
 | `--tilt-scroll-speed 2000` | 1200 | Faster tilt scrolling: pixels per second with the hand tilted about 30°. |
 | `--no-tilt` | off | Tilting the hand doesn't scroll or swipe; only moving it does. |
@@ -124,7 +124,7 @@ Example: `./run.sh --speed 1.4 --smoothing 1.3`
 
 - `hand_mouse.py`: the whole app. MediaPipe Hand Landmarker finds 21 hand points per camera frame.
   A gesture engine turns them into pointer motion (palm centre, One Euro filter, pointer
-  acceleration), pinch clicks (with hysteresis), and scroll, three-finger swipe and fist poses (debounced).
+  acceleration), pinch clicks (with hysteresis), and scroll, four-finger swipe and fist poses (debounced).
   Tilt scrolling and wrist-flick swipes use MediaPipe's 3D world landmarks to measure how the palm
   leans toward the camera and sideways. A 120 Hz
   thread glides the cursor and scroll between camera frames. Events are posted with macOS Quartz
