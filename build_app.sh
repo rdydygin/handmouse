@@ -6,7 +6,9 @@ cd "$(dirname "$0")"
 
 APP="dist/Hand Mouse.app"
 MODEL=models/hand_landmarker.task
-VERSION=1.6   # bump this, then push a tag "v<VERSION>" to publish a release
+VERSION=1.6   # base version; every push to main publishes v1.6, then v1.6.1, v1.6.2, ...
+# The release workflow passes the exact version (e.g. 1.6.3) in BUILD_VERSION.
+if [ -n "${BUILD_VERSION:-}" ]; then VERSION=$BUILD_VERSION; fi
 
 if [ ! -f "$MODEL" ]; then
   mkdir -p models

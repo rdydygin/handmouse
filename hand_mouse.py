@@ -24,7 +24,7 @@ Gestures (palm toward the camera, either hand):
                 can rest it or use the keyboard without moving the cursor
 
 Keys (preview window focused):  q / Esc = quit,  p / space = pause / resume,
-                                s = settings (app only)
+                                s = settings, u = check for updates (app only)
 """
 
 import argparse
@@ -859,7 +859,83 @@ def open_camera(source):
     sys.exit(EXIT_REPORTED)
 
 
-def draw_hud(frame, engine, lms, fps, trusted=True):
+def time_ago(t):
+    s = max(0, time.time() - t)
+    if s < 60:
+        return "just now"
+    if s < 3600:
+        return f"{int(s // 60)} min ago"
+    if s < 86400:
+        return f"{int(s // 3600)} h ago"
+    d = int(s // 86400)
+    return f"{d} day{'s' if d > 1 else ''} ago"
+
+
+class UpdateStatus:
+    """Status of the app's self-update. The launcher (assets/launcher.sh) checks
+    for new releases and writes one line "<state>|<text>" to the file named in
+    HANDMOUSE_UPDATE_STATUS. Pressing U creates the file in
+    HANDMOUSE_UPDATE_REQUEST, which makes the launcher check right away.
+    Run from Terminal (no launcher), there is no status."""
+    COLORS = {"current": (120, 200, 120), "ready": (0, 200, 255), "available": (0, 200, 255),
+              "checking": (200, 200, 200), "downloading": (200, 200, 200),
+              "error": (90, 90, 255), "off": (150, 150, 150)}
+    REQUEST_TIMEOUT = 20   # s to show "Checking..." before the launcher answers
+
+    def __init__(self):
+        self.path = os.environ.get("HANDMOUSE_UPDATE_STATUS")
+        self.request = os.environ.get("HANDMOUSE_UPDATE_REQUEST")
+        self.state = self.text = None
+        self.mtime = 0.0
+        self.next_read = 0.0
+        self.requested = 0.0
+
+    @property
+    def enabled(self):
+        return bool(self.path and self.request)
+
+    def check_now(self):
+        if not self.enabled:
+            return
+        try:
+            os.makedirs(os.path.dirname(self.request), exist_ok=True)
+            open(self.request, "w").close()
+            self.requested = time.time()
+        except OSError as e:
+            print("Could not request an update check:", e, file=sys.stderr)
+
+    def _read(self):
+        now = time.monotonic()
+        if now < self.next_read:
+            return
+        self.next_read = now + 1.0
+        try:
+            mtime = os.stat(self.path).st_mtime
+            if mtime != self.mtime:
+                with open(self.path) as f:
+                    state, _, text = f.readline().strip().partition("|")
+                self.state, self.text, self.mtime = state, text or state, mtime
+        except OSError:
+            pass
+
+    def get(self):
+        """(state, text) to show, or None."""
+        if not self.enabled:
+            return None
+        self._read()
+        if self.requested and self.mtime < self.requested:
+            if time.time() - self.requested < self.REQUEST_TIMEOUT:
+                return "checking", "Checking for updates..."
+            self.requested = 0.0
+        if not self.state:
+            return None
+        text = self.text
+        if self.state == "current":
+            text += f" (checked {time_ago(self.mtime)})"
+        return self.state, text
+
+
+def draw_hud(frame, engine, lms, fps, trusted=True, update=None):
     h, w = frame.shape[:2]
     colors = {"move": (80, 220, 80), "click": (0, 200, 255), "drag": (0, 140, 255),
               "right click": (255, 120, 0), "scroll": (255, 0, 200), "swipe": (0, 220, 220),
@@ -899,8 +975,19 @@ def draw_hud(frame, engine, lms, fps, trusted=True):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
         cv2.putText(frame, "Settings > Privacy & Security > Accessibility", (10, 76),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
-    keys = "q quit   p pause   s settings" if os.environ.get("HANDMOUSE_SETTINGS") else "q quit   p pause"
+    keys = "q quit   p pause"
+    if os.environ.get("HANDMOUSE_SETTINGS"):
+        keys += "   s settings"
+    status = update.get() if update else None
+    if update and update.enabled:
+        keys += "   u check for updates"
     cv2.putText(frame, keys, (10, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
+    if status:
+        state, text = status
+        txt = f"Updates: {text}"
+        cv2.putText(frame, txt, (10, h - 32), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (20, 20, 20), 3)
+        cv2.putText(frame, txt, (10, h - 32), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                    UpdateStatus.COLORS.get(state, (200, 200, 200)), 1)
 
 
 def parse_args(argv=None):
@@ -968,6 +1055,7 @@ def main(argv=None):
     )
     cap = open_camera(cfg.camera)
     engine = GestureEngine(mouse, cfg)
+    update = UpdateStatus()
     atexit.register(engine.release_all)   # also covers Cmd+Q, which exits without unwinding
     win = "Hand Mouse"
     t0, last_ts, fps, prev_t, fails = time.monotonic(), -1, 0.0, time.monotonic(), 0
@@ -1013,7 +1101,7 @@ def main(argv=None):
                 fps = 0.9 * fps + 0.1 / max(now - prev_t, 1e-3)
                 prev_t = now
                 if not cfg.no_preview:
-                    draw_hud(frame, engine, lms, fps, trusted)
+                    draw_hud(frame, engine, lms, fps, trusted, update)
                     cv2.imshow(win, frame)
                     key = cv2.waitKey(1) & 0xFF
                     if key in (ord("q"), 27):
@@ -1022,6 +1110,8 @@ def main(argv=None):
                         engine.toggle_pause()
                     if key == ord("s") and os.environ.get("HANDMOUSE_SETTINGS"):
                         subprocess.Popen(["open", "-e", os.environ["HANDMOUSE_SETTINGS"]])
+                    if key == ord("u"):
+                        update.check_now()
                     # Closing the window with its red button quits.
                     try:
                         visible = cv2.getWindowProperty(win, cv2.WND_PROP_VISIBLE)

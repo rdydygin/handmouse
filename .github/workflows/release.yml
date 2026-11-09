@@ -1,37 +1,72 @@
-# Publishes a release when a version tag is pushed, e.g.:
-#   git tag v1.4 && git push origin v1.4
-# The tag must match VERSION in build_app.sh. Installed copies of Hand Mouse
-# check the latest release about once a day and update themselves from it.
+# Publishes a release for every push to main (merged pull requests included).
+#
+# Version numbers come from VERSION in build_app.sh:
+#   - the first release after VERSION changes is "v<VERSION>"   (e.g. v1.7)
+#   - each later push adds a patch number   (v1.7.1, v1.7.2, ...)
+# So bump VERSION only for a bigger release; every push gets a new version anyway.
+#
+# Installed copies of Hand Mouse check the latest release about once a day and
+# update themselves from it.
 name: Release
 
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
+
+# One at a time, so two quick pushes never pick the same version number.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # all tags, to work out the next version
 
-      - name: Check the tag matches build_app.sh
+      - name: Pick the version
+        id: version
         run: |
-          version=$(sed -n 's/^VERSION=\([0-9.]*\).*/\1/p' build_app.sh)
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match VERSION=$version in build_app.sh"
-            exit 1
+          if tag=$(git tag --points-at HEAD | grep -E '^v[0-9]' | head -n 1) && [ -n "$tag" ]; then
+            echo "This commit was already released as $tag."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          base=$(sed -n 's/^VERSION=\([0-9.]*\).*/\1/p' build_app.sh)
+          case "$base" in ''|*[!0-9.]*|.*|*.|*..*)
+            echo "::error::Could not read VERSION from build_app.sh (got '$base')"; exit 1 ;;
+          esac
+          if ! git rev-parse -q --verify "refs/tags/v$base" >/dev/null; then
+            version=$base
+          else
+            base_re=$(printf '%s' "$base" | sed 's/\./\\./g')
+            last=$(git tag -l "v$base.*" | sed -n "s/^v$base_re\.\([0-9][0-9]*\)$/\1/p" | sort -n | tail -n 1)
+            version="$base.$(( ${last:-0} + 1 ))"
+          fi
+          echo "Releasing version $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Build Hand Mouse.app
+        if: steps.version.outputs.skip != 'true'
+        env:
+          BUILD_VERSION: ${{ steps.version.outputs.version }}
         run: ./build_app.sh
 
       - name: Zip
+        if: steps.version.outputs.skip != 'true'
         run: cd dist && zip -qry ../Hand-Mouse-app.zip "Hand Mouse.app"
 
       - name: Publish release
+        if: steps.version.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" Hand-Mouse-app.zip --title "Hand Mouse ${GITHUB_REF_NAME#v}" --generate-notes
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "v$VERSION" Hand-Mouse-app.zip \
+            --target "$GITHUB_SHA" --title "Hand Mouse $VERSION" --generate-notes
