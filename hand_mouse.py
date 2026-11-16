@@ -435,6 +435,7 @@ class GestureEngine:
         self.tilt = 0.0                        # current tilt past the rest position (HUD)
         self.swipe_ready_at = 0.0
         self.flash, self.flash_until = "", 0.0 # short on-screen message (e.g. swipe)
+        self.flash_dir = 0                     # arrow shown with it: -1 left, 1 right
         self.last_seen = 0.0
         self.facing_away = False               # back of the hand toward the camera
         self.back_n = self.palm_n = 0
@@ -501,8 +502,10 @@ class GestureEngine:
 
     def _switch_desktop(self, nxt, t):
         self.mouse.hotkey(KEY_RIGHT if nxt else KEY_LEFT, "ctrl")
-        self.flash = "DESKTOP >" if nxt else "< DESKTOP"
-        self.flash_until = t + 0.7
+        self._flash("Desktop", nxt, t)
+
+    def _flash(self, text, nxt, t):
+        self.flash, self.flash_dir, self.flash_until = text, 1 if nxt else -1, t + 0.7
 
     def _scroll_and_swipe(self, ax, ay, angles, raw_pose, dt, t):
         cfg, m = self.cfg, self.mouse
@@ -524,8 +527,7 @@ class GestureEngine:
         if nxt is not None:
             if cfg.swipe_action == "browser":
                 m.hotkey(KEY_RBRACKET if nxt else KEY_LBRACKET, "cmd")
-                self.flash = "FORWARD >" if nxt else "< BACK"
-                self.flash_until = t + 0.7
+                self._flash("Forward" if nxt else "Back", nxt, t)
             else:
                 self._switch_desktop(nxt, t)
             m.scroll_momentum(0)
@@ -867,6 +869,21 @@ def open_camera(source):
     sys.exit(EXIT_REPORTED)
 
 
+# The preview is PREVIEW_HEIGHT points tall whatever the camera's resolution (its
+# width follows the camera's shape) and is drawn with UI_SCALE pixels per point,
+# so text and lines stay sharp on Retina displays.
+PREVIEW_HEIGHT, UI_SCALE = 480, 2
+# macOS system colours (dark appearance), as BGR.
+WHITE = (255, 255, 255)
+GREEN, BLUE, ORANGE, RED = (88, 209, 48), (255, 132, 10), (10, 159, 255), (58, 69, 255)
+PURPLE, TEAL, INDIGO, GRAY = (242, 90, 191), (224, 200, 64), (230, 92, 94), (147, 142, 142)
+# engine.mode -> (name shown in the window, colour)
+MODES = {"move": ("Move", GREEN), "click": ("Click", BLUE), "drag": ("Drag", BLUE),
+         "right click": ("Right Click", PURPLE), "scroll": ("Scroll", TEAL),
+         "swipe": ("Swipe", INDIGO), "fist (hold)": ("Hold", GRAY), "paused": ("Paused", ORANGE),
+         "no hand": ("No Hand", GRAY), "back of hand": ("Back of Hand", GRAY)}
+
+
 def time_ago(t):
     s = max(0, time.time() - t)
     if s < 60:
@@ -885,9 +902,8 @@ class UpdateStatus:
     HANDMOUSE_UPDATE_STATUS. Pressing U creates the file in
     HANDMOUSE_UPDATE_REQUEST, which makes the launcher check right away.
     Run from Terminal (no launcher), there is no status."""
-    COLORS = {"current": (120, 200, 120), "ready": (0, 200, 255), "available": (0, 200, 255),
-              "checking": (200, 200, 200), "downloading": (200, 200, 200),
-              "error": (90, 90, 255), "off": (150, 150, 150)}
+    COLORS = {"current": GREEN, "ready": BLUE, "available": BLUE, "checking": GRAY,
+              "downloading": GRAY, "error": RED, "off": GRAY}
     REQUEST_TIMEOUT = 20   # s to show "Checking..." before the launcher answers
 
     def __init__(self):
@@ -943,59 +959,329 @@ class UpdateStatus:
         return self.state, text
 
 
-def draw_hud(frame, engine, lms, fps, trusted=True, update=None):
-    h, w = frame.shape[:2]
-    colors = {"move": (80, 220, 80), "click": (0, 200, 255), "drag": (0, 140, 255),
-              "right click": (255, 120, 0), "scroll": (255, 0, 200), "swipe": (0, 220, 220),
-              "fist (hold)": (180, 180, 180), "paused": (0, 0, 255), "no hand": (120, 120, 120),
-              "back of hand": (120, 120, 120)}
-    color = colors.get(engine.mode, (255, 255, 255))
-    if engine.cfg.absolute:
-        x0, y0, x1, y1 = engine.region(w / h)
-        cv2.rectangle(frame, (int(x0 * w), int(y0 * h)), (int(x1 * w), int(y1 * h)), (90, 90, 90), 1)
-    if lms:
-        pts = [(int(x * w), int(y * h)) for x, y in lms]
-        for a, b in HAND_CONNECTIONS:
-            cv2.line(frame, pts[a], pts[b], (230, 230, 230), 2)
+_sprites = {}   # text and shape masks: drawn once, then reused every frame
+_appkit = None  # AppKit once it's known to work, False if it doesn't
+
+
+def _cached(key, make):
+    m = _sprites.get(key)
+    if m is None:
+        if len(_sprites) > 400:   # readouts that change every frame pile up
+            _sprites.clear()
+        m = _sprites[key] = make()
+    return m
+
+
+def _system_text(A, text, px, weight):
+    """`text` in the macOS system font (San Francisco), drawn by AppKit."""
+    font = A.NSFont.monospacedDigitSystemFontOfSize_weight_(   # digits of equal width:
+        px, {"regular": A.NSFontWeightRegular, "medium": A.NSFontWeightMedium,   # readouts don't jiggle
+             "semibold": A.NSFontWeightSemibold}[weight])
+    s = A.NSAttributedString.alloc().initWithString_attributes_(
+        text, {A.NSFontAttributeName: font, A.NSForegroundColorAttributeName: A.NSColor.whiteColor()})
+    cap = font.capHeight()
+    half = int(math.ceil(max(font.ascender() - cap / 2, cap / 2 - font.descender()))) + 1
+    w, h = int(math.ceil(s.size().width)) + 2, 2 * half
+    rep = A.NSBitmapImageRep.alloc().initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel_(
+        None, w, h, 8, 4, True, False, A.NSDeviceRGBColorSpace, 0, 0)
+    A.NSGraphicsContext.saveGraphicsState()
+    try:
+        A.NSGraphicsContext.setCurrentContext_(A.NSGraphicsContext.graphicsContextWithBitmapImageRep_(rep))
+        A.NSColor.clearColor().set()
+        A.NSRectFillUsingOperation(((0, 0), (w, h)), A.NSCompositingOperationCopy)
+        s.drawAtPoint_((1, half - cap / 2 + font.descender()))   # origin is bottom left
+    finally:
+        A.NSGraphicsContext.restoreGraphicsState()
+    rows = np.frombuffer(rep.bitmapData(), np.uint8, h * rep.bytesPerRow()).reshape(h, rep.bytesPerRow())
+    return rows[:, :w * 4].reshape(h, w, 4)[:, :, 3].copy()
+
+
+def _plain_text(text, px, weight):
+    """The same with OpenCV's built-in font, where there is no AppKit (not on macOS)."""
+    text = text.replace("°", "").replace("·", "-").encode("ascii", "replace").decode()
+    scale, thick = px / 30.0, max(1, round(px / (10 if weight == "semibold" else 16)))
+    (tw, th), base = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, thick)
+    half = th // 2 + base + 2
+    m = np.zeros((2 * half, tw + 4), np.uint8)
+    cv2.putText(m, text, (2, half + th // 2), cv2.FONT_HERSHEY_SIMPLEX, scale, 255, thick, cv2.LINE_AA)
+    return m
+
+
+def _text_mask(text, px, weight):
+    """Alpha mask of `text`, `px` pixels high, with the middle of its capital
+    letters on the mask's middle row, so centring the mask centres the text."""
+    global _appkit
+    if _appkit is None:
+        try:
+            import AppKit
+            _system_text(AppKit, "Hand Mouse", 20, "regular")
+            _appkit = AppKit
+        except Exception:
+            _appkit = False
+    if _appkit:
+        return _system_text(_appkit, text, px, weight)
+    return _plain_text(text, px, weight)
+
+
+def _round_mask(w, h, r):
+    """Alpha mask of a w x h rounded rectangle (drawn 4x larger, then shrunk, for smooth corners)."""
+    k = 4
+    W, H, R = w * k, h * k, int(min(r, w / 2, h / 2) * k)
+    big = np.zeros((H, W), np.uint8)
+    cv2.rectangle(big, (R, 0), (W - R - 1, H - 1), 255, -1)
+    cv2.rectangle(big, (0, R), (W - 1, H - R - 1), 255, -1)
+    for cx in (R, W - R - 1):
+        for cy in (R, H - R - 1):
+            cv2.circle(big, (cx, cy), R, 255, -1)
+    return cv2.resize(big, (w, h), interpolation=cv2.INTER_AREA)
+
+
+def _ring_mask(w, h, r, t):
+    """Just the outline of that rounded rectangle, t pixels thick."""
+    m = _round_mask(w, h, r).copy()
+    if w > 2 * t and h > 2 * t:
+        m[t:h - t, t:w - t] = cv2.subtract(m[t:h - t, t:w - t], _round_mask(w - 2 * t, h - 2 * t, r - t))
+    return m
+
+
+def _chevron_mask(px, direction):
+    m = np.zeros((px, px), np.uint8)
+    a, b, mid = px * 0.34, px * 0.66, px * 0.5
+    x0, x1 = (a, b) if direction > 0 else (b, a)
+    pts = np.array([[x0, px * 0.2], [x1, mid], [x0, px * 0.8]]) * 16
+    cv2.polylines(m, [pts.astype(np.int32)], False, 255, max(2, round(px * 0.11)), cv2.LINE_AA, 4)
+    return m
+
+
+def _warning_mask(px):
+    """A warning triangle with the exclamation mark cut out."""
+    m = np.zeros((px, px), np.uint8)
+    pts = np.array([[px * 0.5, px * 0.12], [px * 0.94, px * 0.86], [px * 0.06, px * 0.86]]) * 16
+    cv2.fillPoly(m, [pts.astype(np.int32)], 255, cv2.LINE_AA, 4)
+    cv2.polylines(m, [pts.astype(np.int32)], True, 255, max(2, round(px * 0.1)), cv2.LINE_AA, 4)
+    cv2.line(m, (px // 2, round(px * 0.38)), (px // 2, round(px * 0.58)), 0, max(2, round(px * 0.09)), cv2.LINE_AA)
+    cv2.circle(m, (px // 2, round(px * 0.74)), max(1, round(px * 0.055)), 0, -1, cv2.LINE_AA)
+    return m
+
+
+class Canvas:
+    """Drawing on the preview. Positions and sizes are in points; the image has
+    UI_SCALE pixels per point."""
+
+    def __init__(self, img):
+        self.img, self.s = img, UI_SCALE
+        self.w, self.h = img.shape[1] / self.s, img.shape[0] / self.s
+
+    def _px(self, v):
+        return int(round(v * self.s))
+
+    def _sub(self, x, y):   # sub-pixel coordinates for OpenCV's shift=4
+        return int(round(x * self.s * 16)), int(round(y * self.s * 16))
+
+    def text(self, text, size, weight="regular"):
+        return _cached(("t", text, size, weight), lambda: _text_mask(text, size * self.s, weight))
+
+    def width(self, mask):
+        return mask.shape[1] / self.s
+
+    def _blend(self, mask, X, Y, color, opacity):
+        """Blend `color` (a BGR colour, or an image the size of the mask) through
+        the alpha mask whose top left pixel goes at (X, Y)."""
+        H, W = self.img.shape[:2]
+        mh, mw = mask.shape
+        x0, y0, x1, y1 = max(X, 0), max(Y, 0), min(X + mw, W), min(Y + mh, H)
+        if x0 >= x1 or y0 >= y1:
+            return
+        crop = (slice(y0 - Y, y1 - Y), slice(x0 - X, x1 - X))
+        roi = self.img[y0:y1, x0:x1]
+        a = mask[crop].astype(np.float32)[:, :, None] * (opacity / 255.0)
+        src = color[crop] if isinstance(color, np.ndarray) else np.float32(color)
+        roi[:] = (roi + (src - roi) * a).astype(np.uint8)
+
+    def blit(self, mask, x, cy, color=WHITE, opacity=1.0, align="left"):
+        """Draw a mask, vertically centred on cy; x is its left edge, centre or right edge."""
+        X = self._px(x) - {"left": 0, "center": mask.shape[1] // 2, "right": mask.shape[1]}[align]
+        self._blend(mask, X, self._px(cy) - mask.shape[0] // 2, color, opacity)
+
+    def fill(self, x, y, w, h, r, color, opacity=1.0):
+        W, H, R = self._px(w), self._px(h), self._px(r)
+        self._blend(_cached(("r", W, H, R), lambda: _round_mask(W, H, R)), self._px(x), self._px(y), color, opacity)
+
+    def outline(self, x, y, w, h, r, color, opacity=1.0, thickness=0.5):
+        W, H, R, T = self._px(w), self._px(h), self._px(r), max(1, self._px(thickness))
+        self._blend(_cached(("o", W, H, R, T), lambda: _ring_mask(W, H, R, T)),
+                    self._px(x), self._px(y), color, opacity)
+
+    def glass(self, x, y, w, h, r, opacity=1.0):
+        """A frosted dark panel: the video behind it shows through, blurred."""
+        X, Y, W, H = self._px(x), self._px(y), self._px(w), self._px(h)
+        ih, iw = self.img.shape[:2]
+        X, Y = min(max(X, 0), max(iw - W, 0)), min(max(Y, 0), max(ih - H, 0))
+        roi = self.img[Y:Y + H, X:X + W]
+        H, W = roi.shape[:2]
+        if W < 8 or H < 8:
+            return
+        # Blurring a small copy is much cheaper and looks the same once it's enlarged.
+        small = cv2.resize(roi, (max(W // 8, 2), max(H // 8, 2)), interpolation=cv2.INTER_AREA)
+        small = cv2.GaussianBlur(small, (0, 0), 3)
+        panel = cv2.resize(small, (W, H), interpolation=cv2.INTER_LINEAR).astype(np.float32)
+        panel = panel * 0.38 + np.float32((34, 30, 30)) * 0.62
+        R = self._px(r)
+        self._blend(_cached(("r", W, H, R), lambda: _round_mask(W, H, R)), X, Y, panel, opacity)
+        self._blend(_cached(("o", W, H, R, 1), lambda: _ring_mask(W, H, R, 1)), X, Y, WHITE, 0.16 * opacity)
+
+    def dot(self, x, y, r, color):
+        cv2.circle(self.img, self._sub(x, y), self._px(r * 16), color, -1, cv2.LINE_AA, 4)
+
+    def dim(self, amount):
+        cv2.convertScaleAbs(self.img, self.img, 1 - amount)
+
+    def scrim(self, height, amount=0.75):
+        """Darken the bottom of the picture, fading in, so text over it reads on any background."""
+        n = self._px(height)
+        g = _cached(("g", n, amount), lambda: (1 - amount * np.linspace(0, 1, n, dtype=np.float32) ** 0.8)[:, None, None])
+        roi = self.img[-n:]
+        roi[:] = (roi * g).astype(np.uint8)
+
+    def hand(self, lms, color, left, right):
+        """The tracked hand: bones, joints, the ring the cursor follows, and the pinch in progress."""
+        s, img = self.s, self.img
+        pts = [(x * self.w, y * self.h) for x, y in lms]
+        # Bones are see-through: draw them on a copy of that part of the picture and mix it back in.
+        ih, iw = img.shape[:2]
+        pad = 8 * s
+        x0 = max(int(min(p[0] for p in pts) * s) - pad, 0)
+        y0 = max(int(min(p[1] for p in pts) * s) - pad, 0)
+        x1 = min(int(max(p[0] for p in pts) * s) + pad, iw)
+        y1 = min(int(max(p[1] for p in pts) * s) + pad, ih)
+        if x1 > x0 and y1 > y0:
+            roi = img[y0:y1, x0:x1]
+            over = roi.copy()
+            off = lambda p: (int(round((p[0] * s - x0) * 16)), int(round((p[1] * s - y0) * 16)))
+            for a, b in HAND_CONNECTIONS:
+                cv2.line(over, off(pts[a]), off(pts[b]), WHITE, self._px(1.5), cv2.LINE_AA, 4)
+            if not (left or right):   # what a pinch measures
+                cv2.line(over, off(pts[THUMB_TIP]), off(pts[INDEX_TIP]), WHITE, self._px(0.5), cv2.LINE_AA, 4)
+            cv2.addWeighted(over, 0.6, roi, 0.4, 0, roi)
         for p in pts:
-            cv2.circle(frame, p, 3, (60, 60, 230), -1)
-        palm = (sum(pts[i][0] for i in PALM) // len(PALM), sum(pts[i][1] for i in PALM) // len(PALM))
-        cv2.circle(frame, palm, 9, color, 2)
-        cv2.line(frame, pts[THUMB_TIP], pts[INDEX_TIP], (0, 200, 255) if engine.left else (100, 100, 100), 1)
-    cv2.rectangle(frame, (0, 0), (w, 34), (25, 25, 25), -1)
-    cv2.putText(frame, engine.mode.upper(), (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-    if time.monotonic() < engine.flash_until:
-        (tw, _), _ = cv2.getTextSize(engine.flash, cv2.FONT_HERSHEY_SIMPLEX, 1.4, 3)
-        cv2.putText(frame, engine.flash, ((w - tw) // 2, h // 2), cv2.FONT_HERSHEY_SIMPLEX, 1.4, (255, 255, 255), 3)
-    if engine.mode == "scroll" and engine.tilt_rest is not None:
-        txt = f"tilt {engine.tilt:+.0f}" if engine.tilt else "tilt to scroll"
-        cv2.putText(frame, txt, (w // 2 - 90, 23), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+            self.dot(p[0], p[1], 2.5, WHITE)
+        for held, tip, c in ((left, INDEX_TIP, BLUE), (right, MIDDLE_TIP, PURPLE)):
+            if held:
+                cv2.line(img, self._sub(*pts[THUMB_TIP]), self._sub(*pts[tip]), c, self._px(2), cv2.LINE_AA, 4)
+                self.dot(*pts[THUMB_TIP], 4.5, c)
+                self.dot(*pts[tip], 4.5, c)
+        px = sum(pts[i][0] for i in PALM) / len(PALM)
+        py = sum(pts[i][1] for i in PALM) / len(PALM)
+        cv2.circle(img, self._sub(px, py), self._px(10 * 16), color, self._px(2), cv2.LINE_AA, 4)
+
+
+def preview_canvas(frame):
+    """The camera frame resized to the preview's size, ready for draw_hud()."""
+    h = PREVIEW_HEIGHT * UI_SCALE
+    w = int(round(PREVIEW_HEIGHT * frame.shape[1] / frame.shape[0])) * UI_SCALE
+    if frame.shape[:2] == (h, w):
+        return frame
+    return cv2.resize(frame, (w, h), interpolation=cv2.INTER_AREA if frame.shape[0] > h else cv2.INTER_LINEAR)
+
+
+def draw_hud(frame, engine, lms, fps, trusted=True, update=None):
+    """Draw the tracked hand and the controls over `frame` (from preview_canvas())."""
+    c = Canvas(frame)
+    W, H, M = c.w, c.h, 14   # M: margin around the edges
+    mode = engine.mode
+    name, color = MODES.get(mode, (mode.title(), WHITE))
+    if mode == "paused":
+        c.dim(0.5)
+    if engine.cfg.absolute:   # the part of the picture that maps onto the screen
+        x0, y0, x1, y1 = engine.region(W / H)
+        c.outline(x0 * W, y0 * H, (x1 - x0) * W, (y1 - y0) * H, 12, WHITE, 0.35, 1)
+    if lms:
+        c.hand(lms, color, engine.left, engine.right)
+    c.scrim(96)
+
+    # Top left: what the hand is doing.
+    t = c.text(name, 13, "semibold")
+    c.glass(M, M, 28 + c.width(t) + 13, 30, 15)
+    c.dot(M + 15, M + 15, 4, color)
+    c.blit(t, M + 27, M + 15)
+
+    # Top right: a readout for tuning, or what to do next.
+    if mode == "paused":
+        hint = "Press P to resume"
+    elif mode == "no hand":
+        hint = "Show your palm to the camera"
+    elif mode == "back of hand":
+        hint = "Turn your palm to the camera"
+    elif mode == "scroll" and engine.tilt_rest is not None:
+        hint = f"Tilt {engine.tilt:+.0f}°" if engine.tilt else "Tilt to scroll"
     elif engine.metrics:
-        txt = f"pinch L {engine.metrics['left']:.2f}  R {engine.metrics['right']:.2f}"
-        cv2.putText(frame, txt, (w // 2 - 90, 23), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
-    cv2.putText(frame, f"{fps:4.0f} fps", (w - 85, 23), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
-    ver = f"v{VERSION}"
-    (tw, _), _ = cv2.getTextSize(ver, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
-    cv2.putText(frame, ver, (w - 100 - tw, 23), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (140, 140, 140), 1)
+        hint = f"Pinch   L {engine.metrics['left']:.2f}   R {engine.metrics['right']:.2f}"
+    else:
+        hint = ""
+    if hint:
+        t = c.text(hint, 12)
+        c.glass(W - M - c.width(t) - 26, M, c.width(t) + 26, 30, 15)
+        c.blit(t, W - M - 13, M + 15, opacity=0.85, align="right")
+
     if not trusted:
-        cv2.rectangle(frame, (0, 34), (w, 84), (0, 0, 170), -1)
-        cv2.putText(frame, "Cursor control is OFF: allow Hand Mouse in", (10, 54),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
-        cv2.putText(frame, "Settings > Privacy & Security > Accessibility", (10, 76),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
-    keys = "q quit   p pause"
-    if os.environ.get("HANDMOUSE_SETTINGS"):
-        keys += "   s settings"
+        y = M + 30 + 10
+        c.glass(M, y, W - 2 * M, 54, 16)
+        c.blit(_cached(("w", c._px(24)), lambda: _warning_mask(c._px(24))), M + 16, y + 27, ORANGE)
+        c.blit(c.text("Cursor control is off", 13, "semibold"), M + 52, y + 18)
+        c.blit(c.text("Allow Hand Mouse in System Settings > Privacy & Security > Accessibility", 12),
+               M + 52, y + 37, opacity=0.7)
+
+    # Centre: a swipe that just happened, fading out.
+    left = engine.flash_until - time.monotonic()
+    if left > 0 and engine.flash:
+        fade = min(left / 0.2, 1.0)
+        t = c.text(engine.flash, 17, "semibold")
+        arrow = _cached(("c", c._px(20), engine.flash_dir), lambda: _chevron_mask(c._px(20), engine.flash_dir))
+        w = c.width(t) + 24 + 2 * 20
+        x, y = (W - w) / 2, H / 2 - 26
+        c.glass(x, y, w, 52, 18, fade)
+        if engine.flash_dir < 0:
+            c.blit(arrow, x + 16, y + 26, opacity=0.6 * fade)
+            c.blit(t, x + 44, y + 26, opacity=fade)
+        else:
+            c.blit(t, x + 20, y + 26, opacity=fade)
+            c.blit(arrow, x + w - 16, y + 26, opacity=0.6 * fade, align="right")
+
+    # Bottom: update status, then the keys.
     status = update.get() if update else None
-    if update and update.enabled:
-        keys += "   u check for updates"
-    cv2.putText(frame, keys, (10, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
     if status:
         state, text = status
-        txt = f"Updates: {text}"
-        cv2.putText(frame, txt, (10, h - 32), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (20, 20, 20), 3)
-        cv2.putText(frame, txt, (10, h - 32), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
-                    UpdateStatus.COLORS.get(state, (200, 200, 200)), 1)
+        c.dot(M + 5, H - 46, 3.5, UpdateStatus.COLORS.get(state, GRAY))
+        c.blit(c.text(text, 12), M + 16, H - 46, opacity=0.85)
+    keys = [("Q", "Quit"), ("P", "Pause" if mode != "paused" else "Resume")]
+    if os.environ.get("HANDMOUSE_SETTINGS"):
+        keys.append(("S", "Settings"))
+    if update and update.enabled:
+        keys.append(("U", "Check for Updates"))
+    x, y = M, H - 20
+    for key, label in keys:
+        c.fill(x, y - 9, 18, 18, 5, WHITE, 0.2)
+        c.blit(c.text(key, 11, "semibold"), x + 9, y, align="center")
+        t = c.text(label, 12)
+        c.blit(t, x + 24, y, opacity=0.85)
+        x += 24 + c.width(t) + 16
+    c.blit(c.text(f"{fps:.0f} fps  ·  v{VERSION}", 11), W - M, y, opacity=0.5, align="right")
+
+
+def style_window(title, width, height):
+    """Make the preview window look at home on the Mac: a dark title bar that
+    blends into the video, and resizing that keeps the picture's shape."""
+    try:
+        from AppKit import NSApplication, NSAppearance, NSColor
+        for w in NSApplication.sharedApplication().windows():
+            if w.title() == title:
+                w.setAppearance_(NSAppearance.appearanceNamed_("NSAppearanceNameDarkAqua"))
+                w.setTitlebarAppearsTransparent_(True)
+                w.setBackgroundColor_(NSColor.blackColor())
+                w.setContentAspectRatio_((width, height))
+                w.setContentMinSize_((width / 2, height / 2))
+    except Exception as e:
+        print("Could not style the window:", e, file=sys.stderr)
 
 
 def parse_args(argv=None):
@@ -1070,6 +1356,8 @@ def main(argv=None):
     win = "Hand Mouse"
     t0, last_ts, fps, prev_t, fails = time.monotonic(), -1, 0.0, time.monotonic(), 0
     last_trust_check, window_seen = time.monotonic(), False
+    if not cfg.no_preview:   # resizable, and sized in points rather than image pixels
+        cv2.namedWindow(win, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
     live = str(cfg.camera).isdigit()   # video files (testing) get every frame tracked
     last_hand = last_detect = time.monotonic()
     print(f"Hand Mouse {VERSION}")
@@ -1111,8 +1399,14 @@ def main(argv=None):
                 fps = 0.9 * fps + 0.1 / max(now - prev_t, 1e-3)
                 prev_t = now
                 if not cfg.no_preview:
-                    draw_hud(frame, engine, lms, fps, trusted, update)
-                    cv2.imshow(win, frame)
+                    canvas = preview_canvas(frame)
+                    draw_hud(canvas, engine, lms, fps, trusted, update)
+                    cv2.imshow(win, canvas)
+                    if not window_seen:
+                        size = canvas.shape[1] // UI_SCALE, canvas.shape[0] // UI_SCALE
+                        cv2.resizeWindow(win, *size)
+                        if on_mac:
+                            style_window(win, *size)
                     key = cv2.waitKey(1) & 0xFF
                     if key in (ord("q"), 27):
                         break
