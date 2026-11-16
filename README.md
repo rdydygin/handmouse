@@ -22,7 +22,7 @@ Hand tracking runs entirely on your Mac (Google MediaPipe); nothing is uploaded.
 4. Approve two permissions when macOS asks:
    - **Camera**: click **Allow**.
    - **Accessibility** (lets it move the pointer): click **Open System Settings** and switch on
-     **Hand Mouse**. Until then a red banner in the window says cursor control is off. If the
+     **Hand Mouse**. Until then a banner in the window says cursor control is off. If the
      pointer still doesn't move once it's switched on, quit Hand Mouse (press `q`) and open it again.
 
 To quit, press `q` in the Hand Mouse window, close the window, or press ⌘Q.
@@ -36,8 +36,8 @@ notification confirms the new version. Your settings are kept. To turn this off,
 `--no-auto-update` to the settings file.
 
 The update status is shown at the bottom of the Hand Mouse window, e.g.
-`Updates: Up to date (checked 2 h ago)`, `Updates: Downloading version 1.6.3...` or
-`Updates: Version 1.6.3 ready: reopen Hand Mouse to install`. Press `u` in the window to check
+`Up to date (checked 2 h ago)`, `Downloading version 1.6.3...` or
+`Version 1.6.3 ready: reopen Hand Mouse to install`. Press `u` in the window to check
 right now. With auto-update off, `u` still tells you whether a newer version is available.
 
 Updates are only installed when the app can replace itself: keep it in **Applications** and run it
@@ -76,17 +76,17 @@ Hold one hand up, palm toward the camera, about 40–70 cm from the screen. Eith
 | Drag          | Pinch thumb + index, move, release. |
 | Right click   | Tap thumb and **middle** fingertips together. |
 | Scroll        | ✌️ Peace sign (index + middle up, ring + pinky folded), then **tilt** your fingers toward the camera to scroll down, or back to scroll up, keeping your wrist where it is. It works like a joystick: tilt further to scroll faster, hold the tilt to keep scrolling, straighten up to stop. The top bar shows the tilt in degrees; small tilts (under about 10°) do nothing. You can also move your whole hand up/down instead: flick and then drop the peace sign to let it coast, like a trackpad. Make the peace sign again (or click) to stop the coasting. |
-| Switch desktop | **Four fingers** up with your **thumb tucked** across your palm (toward the base of your ring finger), then a quick flick **left or right**: switches desktops / full-screen apps, like a 4-finger trackpad swipe. Flick left = next desktop, right = previous. A flick of the wrist is enough: swing your fingers sideways like a windshield wiper (about 20°) without moving your hand across the frame. The cursor holds still while your thumb is tucked (the window shows `SWIPE`). |
+| Switch desktop | **Four fingers** up with your **thumb tucked** across your palm (toward the base of your ring finger), then a quick flick **left or right**: switches desktops / full-screen apps, like a 4-finger trackpad swipe. Flick left = next desktop, right = previous. A flick of the wrist is enough: swing your fingers sideways like a windshield wiper (about 20°) without moving your hand across the frame. The cursor holds still while your thumb is tucked (the window shows **Swipe**). |
 | Swipe         | ✌️ Peace sign + a quick flick **left or right** (a wrist flick is enough here too) also switches desktops. Can be set to browser back/forward instead, so the two swipes do different things. |
 | Re-center     | ✊ Make a fist: the cursor stays put while you move your hand back to a comfortable spot. Open your hand to continue. Like lifting a mouse off the desk. |
-| Ignore hand   | Turn the **back** of your hand to the camera: it isn't tracked (the window shows `BACK OF HAND`), so you can rest it or type without moving the cursor. Show your palm again to continue. |
+| Ignore hand   | Turn the **back** of your hand to the camera: it isn't tracked (the window shows **Back of Hand**), so you can rest it or type without moving the cursor. Show your palm again to continue. |
 | Pause/resume  | Press `p` or space in the Hand Mouse window. |
 | Check for updates | Press `u` in the Hand Mouse window (app only). |
 | Quit          | Press `q` or Esc in the Hand Mouse window (or ⌘Q, or close the window). |
 
 The preview window shows your tracked hand, the current mode, and live pinch values
-(`pinch L` / `R`): a click fires when the value drops below 0.28.
-The version number is in the top bar, next to the frame rate (`./run.sh --version` from Terminal).
+(`Pinch L` / `R`, top right): a click fires when the value drops below 0.28.
+The version number is in the bottom right corner, next to the frame rate (`./run.sh --version` from Terminal).
 
 ## Tuning
 
@@ -155,7 +155,7 @@ in the same pull request. Installed copies pick up a new release within a day, o
 
 ## Troubleshooting
 
-- **Pointer doesn't move but the window shows "MOVE"**: turn on Hand Mouse in *System Settings →
+- **Pointer doesn't move but the window shows "Move"**: turn on Hand Mouse in *System Settings →
   Privacy & Security → Accessibility*, then quit and reopen it. If it's already on, remove it with
   the **–** button, reopen Hand Mouse and allow it again. This also applies after moving the app
   to a different folder.
